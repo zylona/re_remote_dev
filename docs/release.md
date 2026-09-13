@@ -6,7 +6,15 @@
 
 公开 Release 只包含 Git 跟踪文件构建出的制品。真实 Inventory、`.local/` 凭据、SSH 配置和运行报告均不会进入源码包或 tarball；发布前应执行一次脱敏审计并确认 `git archive HEAD` 中没有密钥、密码和 Token。版本变更摘要维护在 [CHANGELOG.md](../CHANGELOG.md)。
 
-发布由 `.github/workflows/release.yml` 完成。维护者提交并推送符合 `vMAJOR.MINOR.PATCH` 的 tag 后，GitHub Actions 会先运行 inventory/syntax/lint/pytest 门禁，再构建带固定时间戳的 tar.gz 与 SHA256 文件，最后使用 GitHub CLI 创建 Release 并上传制品。workflow 使用仓库 `GITHUB_TOKEN` 的 `contents: write` 权限，无需保存个人 Token。
+发布由 `.github/workflows/release.yml` 完成。`master`/`dev` 的每次推送都会运行检查并生成短期 Actions artifact；维护者提交并推送符合 `vMAJOR.MINOR.PATCH` 的 tag 后，GitHub Actions 会先运行 inventory/syntax/lint/pytest 门禁，再构建带固定时间戳的 tar.gz 与 SHA256 文件，最后使用 GitHub CLI 创建 Release 并上传制品。workflow 使用仓库 `GITHUB_TOKEN` 的 `contents: write` 权限，无需保存个人 Token。
+
+Actions artifact 仅用于 CI 任务间传递，公开仓库最长保留 90 天；长期依赖必须使用 GitHub Release asset。Release 制品不会按 Actions artifact 的保留周期自动删除，可通过稳定地址获取最新版：
+
+```text
+https://github.com/zylona/re_remote_dev/releases/latest/download/remote-dev-orchestrator-v<VERSION>-linux.tar.gz
+```
+
+生产环境应固定具体版本 Tag，并同时下载 `.sha256` 校验文件，不要依赖 `latest`。
 
 发布前必须在至少一个 VM 和一个真实设备上完成多窗口 SSH、ControlMaster 自动恢复、4227/4228 转发以及 Ctrl-C 清理；只看到 systemd `active` 不足以判定稳定。若 `NRestarts` 持续增加，应先修复隧道/主机密钥问题，不要打 tag。
 

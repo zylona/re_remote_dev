@@ -110,7 +110,7 @@ all:
 systemctl --user status remote-dev-orchestrator.socket
 ```
 
-也可以从 [Releases](https://github.com/zylona/re_remote_dev/releases) 下载 `remote-dev-orchestrator-*-linux.tar.gz`，先校验 `.sha256`，再运行包内安装器。详见 [docs/release.md](docs/release.md)。
+也可以从 [Releases](https://github.com/zylona/re_remote_dev/releases) 下载 `remote-dev-orchestrator-*-linux.tar.gz`，先校验 `.sha256`，再运行包内安装器。Release asset 用于长期依赖，Actions artifact 仅用于短期 CI 传递。详见 [docs/release.md](docs/release.md)。
 
 ## 代理与 Codex
 

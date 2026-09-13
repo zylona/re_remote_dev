@@ -36,7 +36,9 @@ jobs:
           name: remote-dev-orchestrator-${{ github.sha }}
           path: dist/*
           if-no-files-found: error
-          retention-days: 14
+          # Actions artifacts are CI hand-off files, not the public distribution channel.
+          # Public repositories support a maximum retention of 90 days.
+          retention-days: 90
 
   release:
     if: startsWith(github.ref, 'refs/tags/v')
