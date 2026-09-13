@@ -184,9 +184,11 @@ class OrchestratorServer:
 def _listener_from_systemd() -> socket.socket | None:
     if os.environ.get("LISTEN_PID") != str(os.getpid()) or os.environ.get("LISTEN_FDS") != "1":
         return None
-    listener = socket.fromfd(3, socket.AF_UNIX, socket.SOCK_STREAM)
-    os.close(3)
-    return listener
+    # Transfer ownership of systemd's fd 3 directly.  ``socket.fromfd``
+    # duplicates the descriptor, which can leave the activation listener in a
+    # state where the path exists but client connects are refused on some
+    # systemd/Python combinations.
+    return socket.socket(fileno=3)
 
 
 def run_server(path: Path | None = None) -> None:
