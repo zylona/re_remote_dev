@@ -1,0 +1,20 @@
+---
+# 复制为 inventory/production.yml 后填写真实设备；production.yml 已被 Git 忽略。
+all:
+  vars:
+    remote_dev:
+      schema_version: 1
+      target_user: developer
+      initial_user: developer
+      ssh_private_key_file: ~/.ssh/id_ed25519
+      manage_sshd_forwarding: true
+      profile: default
+      proxy: {mode: auto, host: 127.0.0.1, port: 4227, remote_port_range: [40000, 60000]}
+  children:
+    remote_dev_targets:
+      hosts:
+        my-host:
+          ansible_host: 203.0.113.10
+          ansible_port: 22
+          ansible_user: developer
+          ansible_ssh_private_key_file: ~/.ssh/id_ed25519

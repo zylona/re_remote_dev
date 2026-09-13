@@ -1,0 +1,140 @@
+---
+- name: 探测 Docker daemon
+  ansible.builtin.command:
+    argv: [systemctl, show, docker.service, --property=LoadState, --value]
+  register: docker_proxy_load_state
+  changed_when: false
+  failed_when: false
+  when: docker_proxy_enabled | bool
+
+- name: 探测 Docker daemon 当前状态
+  ansible.builtin.command:
+    argv: [systemctl, is-active, docker.service]
+  register: docker_proxy_service_active
+  changed_when: false
+  failed_when: false
+  when:
+    - docker_proxy_enabled | bool
+    - docker_proxy_load_state.stdout | default('') | trim == 'loaded'
+
+- name: 探测 dockerd 可执行文件
+  ansible.builtin.command:
+    argv: [sh, -c, "command -v dockerd"]
+  register: docker_proxy_dockerd_path
+  changed_when: false
+  failed_when: false
+  when:
+    - docker_proxy_enabled | bool
+    - docker_proxy_load_state.stdout | default('') | trim == 'loaded'
+
+- name: 读取 Docker daemon 版本
+  ansible.builtin.command:
+    argv: ["{{ docker_proxy_dockerd_path.stdout | trim }}", --version]
+  register: docker_proxy_dockerd_version
+  changed_when: false
+  failed_when: false
+  when:
+    - docker_proxy_enabled | bool
+    - docker_proxy_dockerd_path.rc | default(1) | int == 0
+
+- name: 识别 Docker daemon 主版本
+  ansible.builtin.set_fact:
+    docker_proxy_dockerd_major: >-
+      {{ (((docker_proxy_dockerd_version.stdout | default('')) ~
+          (docker_proxy_dockerd_version.stderr | default('')))
+          | regex_findall('[0-9]+') | first | default('0', true)) | int }}
+  when:
+    - docker_proxy_enabled | bool
+    - docker_proxy_dockerd_path.rc | default(1) | int == 0
+
+- name: 读取现有 Docker daemon 配置
+  ansible.builtin.slurp:
+    src: "{{ docker_proxy_daemon_config_path }}"
+  register: docker_proxy_daemon_config_raw
+  failed_when: false
+  when:
+    - docker_proxy_enabled | bool
+    - docker_proxy_load_state.stdout | default('') | trim == 'loaded'
+    - docker_proxy_dockerd_major | default(0) | int >= 23
+
+- name: 合并 Docker daemon 代理配置
+  ansible.builtin.set_fact:
+    docker_proxy_daemon_config: >-
+      {{ ((docker_proxy_daemon_config_raw.content | b64decode | from_json)
+          if (docker_proxy_daemon_config_raw.content | default('') | length > 0) else {})
+         | combine({'proxies': {
+             'http-proxy': docker_proxy_url,
+             'https-proxy': docker_proxy_url,
+             'no-proxy': docker_proxy_no_proxy
+           }}, recursive=True) }}
+  when:
+    - docker_proxy_enabled | bool
+    - docker_proxy_load_state.stdout | default('') | trim == 'loaded'
+    - docker_proxy_dockerd_major | default(0) | int >= 23
+
+- name: 创建 Docker daemon 配置目录
+  ansible.builtin.file:
+    path: "{{ docker_proxy_daemon_config_path | dirname }}"
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+  when:
+    - docker_proxy_enabled | bool
+    - docker_proxy_load_state.stdout | default('') | trim == 'loaded'
+    - docker_proxy_dockerd_major | default(0) | int >= 23
+
+- name: 写入 Docker daemon 官方代理配置
+  ansible.builtin.copy:
+    dest: "{{ docker_proxy_daemon_config_path }}"
+    content: "{{ docker_proxy_daemon_config | to_nice_json(indent=2) }}\n"
+    owner: root
+    group: root
+    mode: '0644'
+    backup: true
+    validate: "{{ docker_proxy_dockerd_path.stdout | trim }} --validate --config-file=%s"
+  notify:
+    - Reload systemd for Docker proxy
+    - Restart active Docker for proxy
+  when:
+    - docker_proxy_enabled | bool
+    - docker_proxy_load_state.stdout | default('') | trim == 'loaded'
+    - docker_proxy_dockerd_path.rc | default(1) | int == 0
+    - docker_proxy_dockerd_major | default(0) | int >= 23
+
+- name: 创建 Docker systemd drop-in 目录
+  ansible.builtin.file:
+    path: "{{ docker_proxy_dropin | dirname }}"
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+  when:
+    - docker_proxy_enabled | bool
+    - docker_proxy_load_state.stdout | default('') | trim == 'loaded'
+
+- name: 配置 Docker daemon 使用受管 SSH 代理
+  ansible.builtin.copy:
+    dest: "{{ docker_proxy_dropin }}"
+    content: |
+      # Managed by remote-dev. The SSH service provides this loopback listener.
+      [Service]
+      Environment="HTTP_PROXY={{ docker_proxy_url }}"
+      Environment="HTTPS_PROXY={{ docker_proxy_url }}"
+      Environment="NO_PROXY={{ docker_proxy_no_proxy }}"
+    owner: root
+    group: root
+    mode: '0644'
+  notify:
+    - Reload systemd for Docker proxy
+    - Restart active Docker for proxy
+  when:
+    - docker_proxy_enabled | bool
+    - docker_proxy_load_state.stdout | default('') | trim == 'loaded'
+
+- name: 提示非 systemd Docker 不适用
+  ansible.builtin.debug:
+    msg: "未发现 systemd 管理的 docker.service，跳过 Docker daemon 代理配置。"
+  when:
+    - docker_proxy_enabled | bool
+    - docker_proxy_load_state.stdout | default('') | trim != 'loaded'

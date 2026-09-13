@@ -1,0 +1,16 @@
+[Unit]
+Description=remote-dev local orchestrator
+Requires=remote-dev-orchestrator.socket
+After=remote-dev-orchestrator.socket
+
+[Service]
+Type=simple
+ExecStart=remote-dev orchestrator-server
+KillSignal=SIGTERM
+TimeoutStopSec=5
+NoNewPrivileges=yes
+PrivateTmp=yes
+MemoryMax=128M
+TasksMax=32
+
+# 通过 systemd socket activation 启动；不作为 root 服务运行。

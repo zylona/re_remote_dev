@@ -1,0 +1,8 @@
+---
+- name: P0 无 Python 运行时 bootstrap
+  hosts: remote_dev_targets
+  gather_facts: false
+  vars:
+    ansible_ssh_common_args: "-F/dev/null"
+  roles:
+    - bootstrap_runtime

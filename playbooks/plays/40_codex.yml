@@ -1,0 +1,8 @@
+---
+- name: P5 Codex CLI 恢复
+  hosts: remote_dev_targets
+  gather_facts: true
+  become: true
+  become_user: "{{ remote_dev.target_user }}"
+  roles:
+    - codex

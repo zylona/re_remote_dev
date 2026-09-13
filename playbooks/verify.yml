@@ -1,0 +1,3 @@
+---
+- name: P0 独立只读验收
+  import_playbook: plays/90_verify.yml

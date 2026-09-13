@@ -1,0 +1,6 @@
+// remote-dev: Catppuccin-inspired compact defaults
+pane_frames false
+default_layout "dev"
+copy_on_select true
+scroll_buffer_size 10000
+theme "catppuccin-mocha"

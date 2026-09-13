@@ -1,0 +1,25 @@
+---
+- name: 创建 Zellij 配置目录
+  ansible.builtin.file:
+    path: "{{ ansible_facts.user_dir }}/.config/zellij/layouts"
+    state: directory
+    mode: '0755'
+- name: 部署 Zellij 配置
+  ansible.builtin.copy:
+    src: config.kdl
+    dest: "{{ ansible_facts.user_dir }}/.config/zellij/config.kdl"
+    mode: '0644'
+- name: 部署 Zellij 布局
+  ansible.builtin.copy:
+    src: "{{ item }}"
+    dest: "{{ ansible_facts.user_dir }}/.config/zellij/layouts/{{ item }}"
+    mode: '0644'
+  loop:
+    - dev.kdl
+    - ops.kdl
+    - plain.kdl
+- name: 部署 tmux fallback 配置
+  ansible.builtin.copy:
+    src: tmux.conf
+    dest: "{{ ansible_facts.user_dir }}/.tmux.conf"
+    mode: '0644'

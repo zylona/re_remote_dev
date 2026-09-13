@@ -1,0 +1,119 @@
+---
+- name: 检查基础下载工具
+  ansible.builtin.command:
+    argv: [sh, -c, "command -v {{ item }}"]
+  loop: "{{ tools_required_commands }}"
+  register: tools_prereq_check
+  changed_when: false
+  failed_when: false
+  environment:
+    PATH: "{{ ansible_facts.user_dir }}/.local/bin:/usr/local/bin:/usr/bin:/bin"
+- name: 缺少基础下载工具时直接失败
+  ansible.builtin.assert:
+    that:
+      - (tools_prereq_check.results | selectattr('rc', 'ne', 0) | list | length) == 0
+    fail_msg: >-
+      目标机缺少项目安装所需基础工具：{{ tools_prereq_check.results
+      | selectattr('rc', 'ne', 0) | map(attribute='item') | list | join(', ') }}。
+      请用户按发行版安装后重试。
+- name: 创建用户工具目录
+  ansible.builtin.file:
+    path: "{{ tools_install_dir }}"
+    state: directory
+    mode: '0755'
+- name: 映射目标架构
+  ansible.builtin.set_fact:
+    tools_release_arch: "{{ {'x86_64': 'x86_64', 'amd64': 'x86_64', 'aarch64': 'aarch64', 'arm64': 'aarch64'}.get(ansible_facts.architecture, '') }}"
+    tools_fzf_arch: "{{ {'x86_64': 'amd64', 'amd64': 'amd64', 'aarch64': 'arm64', 'arm64': 'arm64'}.get(ansible_facts.architecture, '') }}"
+- name: 拒绝不支持的目标架构
+  ansible.builtin.assert:
+    that: tools_release_arch | length > 0
+    fail_msg: "目标架构 {{ ansible_facts.architecture }} 暂不支持，当前支持 x86_64/amd64、aarch64/arm64。"
+- name: 探测 libc 类型
+  ansible.builtin.command:
+    argv: [sh, -c, "ldd --version 2>&1 | head -1"]
+  register: tools_libc_probe
+  changed_when: false
+  failed_when: false
+- name: 创建 release 缓存目录
+  ansible.builtin.file:
+    path: "{{ tools_cache_dir }}"
+    state: directory
+    mode: '0755'
+- name: 使用 mise 官方安装脚本  # noqa command-instead-of-module risky-shell-pipe
+  when: not (tools_offline | bool)
+  ansible.builtin.shell:
+    cmd: "set -o pipefail; curl -fsSL https://mise.run | sh"
+    creates: "{{ tools_install_dir }}/mise"
+  environment:
+    HOME: "{{ ansible_facts.user_dir }}"
+    MISE_INSTALL_PATH: "{{ tools_install_dir }}/mise"
+    http_proxy: "{{ remote_dev_temp_proxy_url | default(omit) }}"
+    https_proxy: "{{ remote_dev_temp_proxy_url | default(omit) }}"
+- name: 安装 zoxide 官方 release  # noqa command-instead-of-module risky-shell-pipe
+  when: not (tools_offline | bool)
+  ansible.builtin.shell:
+    cmd: "curl -fsSL https://raw.githubusercontent.com/ajeetdsouza/zoxide/main/install.sh | sh"
+    creates: "{{ tools_install_dir }}/zoxide"
+  environment:
+    http_proxy: "{{ remote_dev_temp_proxy_url | default(omit) }}"
+    https_proxy: "{{ remote_dev_temp_proxy_url | default(omit) }}"
+- name: 安装 zellij 官方 release  # noqa command-instead-of-module risky-shell-pipe
+  when: not (tools_offline | bool)
+  ansible.builtin.shell:
+    cmd: >-
+      set -o pipefail; tmp=$(mktemp); curl -fsSL
+      https://github.com/zellij-org/zellij/releases/download/v{{ tools_zellij_version }}/zellij-{{ tools_release_arch }}-unknown-linux-musl.tar.gz
+      > "$tmp" && tar -xz -O zellij < "$tmp" > {{ tools_install_dir }}/zellij.tmp
+      && chmod 0755 {{ tools_install_dir }}/zellij.tmp && mv {{ tools_install_dir }}/zellij.tmp {{ tools_install_dir }}/zellij; rm -f "$tmp"
+    creates: "{{ tools_install_dir }}/zellij"
+  environment:
+    http_proxy: "{{ remote_dev_temp_proxy_url | default(omit) }}"
+    https_proxy: "{{ remote_dev_temp_proxy_url | default(omit) }}"
+- name: 安装 fzf 官方 release  # noqa command-instead-of-module risky-shell-pipe
+  when: not (tools_offline | bool)
+  ansible.builtin.shell:
+    cmd: >-
+      set -o pipefail; tmp=$(mktemp); curl -fsSL
+      https://github.com/junegunn/fzf/releases/download/v{{ tools_fzf_version }}/fzf-{{ tools_fzf_version }}-linux_{{ tools_fzf_arch }}.tar.gz
+      > "$tmp" && tar -xz -O fzf < "$tmp" > {{ tools_install_dir }}/fzf.tmp
+      && chmod 0755 {{ tools_install_dir }}/fzf.tmp && mv {{ tools_install_dir }}/fzf.tmp {{ tools_install_dir }}/fzf; rm -f "$tmp"
+    creates: "{{ tools_install_dir }}/fzf"
+  environment:
+    http_proxy: "{{ remote_dev_temp_proxy_url | default(omit) }}"
+    https_proxy: "{{ remote_dev_temp_proxy_url | default(omit) }}"
+- name: 离线模式检查工具
+  ansible.builtin.stat:
+    path: "{{ tools_install_dir }}/{{ item }}"
+  loop: [mise, zoxide, zellij, fzf]
+  register: tools_offline_check
+  when: tools_offline | bool
+- name: 离线模式缺少工具时失败
+  ansible.builtin.assert:
+    that: tools_offline_check.results | rejectattr('stat.exists') | list | length == 0
+    fail_msg: "离线模式缺少工具：{{ tools_offline_check.results | rejectattr('stat.exists') | map(attribute='item') | list | join(', ') }}"
+  when: tools_offline | bool
+- name: 验证用户工具安装结果
+  ansible.builtin.command:
+    argv: ["{{ tools_install_dir }}/{{ item }}", --version]
+  loop: [mise, zoxide, zellij, fzf]
+  changed_when: false
+- name: 校验工具 SHA256（提供清单时启用）
+  ansible.builtin.stat:
+    path: "{{ tools_install_dir }}/{{ item.key }}"
+  loop: "{{ tools_checksums | dict2items }}"
+  register: tools_checksum_files
+  when: tools_checksums | length > 0
+- name: 执行工具 SHA256 校验
+  ansible.builtin.command:
+    argv: [sha256sum, "{{ tools_install_dir }}/{{ item.item.key }}"]
+  loop: "{{ tools_checksum_files.results | default([]) }}"
+  register: tools_checksum_results
+  changed_when: false
+  failed_when: item.stdout.split()[0] != item.item.value
+  when: tools_checksums | length > 0
+- name: 导出用户工具缓存归档  # noqa command-instead-of-shell command-instead-of-module
+  ansible.builtin.shell:
+    cmd: "tar -czf {{ tools_cache_archive }} -C {{ tools_install_dir }} mise zoxide zellij fzf"
+    creates: "{{ tools_cache_archive }}"
+  when: tools_cache_archive | length > 0

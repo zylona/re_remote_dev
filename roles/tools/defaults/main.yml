@@ -1,0 +1,12 @@
+---
+tools_required_commands:
+  - curl
+  - unzip
+tools_install_dir: "{{ ansible_facts.user_dir }}/.local/bin"
+tools_zellij_version: "0.40.1"
+tools_fzf_version: "0.60.3"
+tools_zoxide_version: "0.9.8"
+tools_cache_dir: "{{ ansible_facts.user_dir }}/.cache/remote-dev/releases"
+tools_offline: false
+tools_checksums: {}
+tools_cache_archive: ""

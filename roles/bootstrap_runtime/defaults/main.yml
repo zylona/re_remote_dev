@@ -1,0 +1,20 @@
+---
+bootstrap_runtime_packages:
+  - python3
+  - curl
+  - tar
+  - unzip
+  - zsh
+  - git
+  - tmux
+  - sudo
+  - ca-certificates
+  - openssh-server
+  - bubblewrap
+bootstrap_runtime_proxy_env:
+  http_proxy: "{{ remote_dev_temp_proxy_url | default(omit) }}"
+  https_proxy: "{{ remote_dev_temp_proxy_url | default(omit) }}"
+  HTTP_PROXY: "{{ remote_dev_temp_proxy_url | default(omit) }}"
+  HTTPS_PROXY: "{{ remote_dev_temp_proxy_url | default(omit) }}"
+bootstrap_runtime_apt_mirror: http://mirrors.aliyun.com/debian
+bootstrap_runtime_apt_security_mirror: http://mirrors.aliyun.com/debian-security

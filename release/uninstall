@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+set -euo pipefail
+base="${XDG_DATA_HOME:-$HOME/.local/share}/remote-dev-orchestrator"
+systemctl --user disable --now remote-dev-orchestrator.socket remote-dev-orchestrator.service 2>/dev/null || true
+rm -f "${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/remote-dev-orchestrator.service" "${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/remote-dev-orchestrator.socket"
+rm -f "${XDG_BIN_HOME:-$HOME/.local/bin}/remote-dev-orchestrator-server"
+systemctl --user daemon-reload 2>/dev/null || true
+rm -rf "$base"
+echo "remote-dev-orchestrator removed"

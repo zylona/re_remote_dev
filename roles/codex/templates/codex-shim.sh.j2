@@ -1,0 +1,22 @@
+#!/bin/sh
+# remote-dev Codex lifecycle shim; never blocks Codex when the controller is absent.
+set -u
+real={{ codex_real_binary | quote }}
+event_sender={{ codex_libexec_dir | quote }}/remote-dev-codex-event.py
+pty_runner={{ codex_libexec_dir | quote }}/remote-dev-codex-pty.py
+target={{ codex_target_digest | default('unknown') | quote }}
+nonce_file={{ codex_nonce_file | default(ansible_facts.user_dir ~ '/.config/remote-dev/session.nonce') | quote }}
+nonce=$(cat "$nonce_file" 2>/dev/null || true)
+if [ -n "$nonce" ] && [ -x "$event_sender" ]; then
+  python3 "$event_sender" CODEX_START "$target" "$nonce" "$$" >/dev/null 2>&1 || true
+fi
+if [ -x "$pty_runner" ] && [ -t 1 ]; then
+  python3 "$pty_runner" "$event_sender" "$target" "$nonce" "$real" "$@"
+else
+  "$real" "$@"
+fi
+status=$?
+if [ -n "$nonce" ] && [ -x "$event_sender" ]; then
+  python3 "$event_sender" CODEX_EXIT "$target" "$nonce" "$$:$status" >/dev/null 2>&1 || true
+fi
+exit "$status"

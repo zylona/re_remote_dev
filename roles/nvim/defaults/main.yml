@@ -1,0 +1,43 @@
+---
+nvim_package_name: neovim
+nvim_compiler_package: build-essential
+nvim_treesitter_cli_package: tree-sitter-cli
+nvim_min_version: "0.9.0"
+nvim_release_version: "0.11.3"
+nvim_release_arch: "x86_64"
+nvim_release_root: "{{ ansible_facts.user_dir }}/.local/share/remote-dev/nvim"
+nvim_install_dir: "{{ ansible_facts.user_dir }}/.local/bin"
+nvim_config_dir: "{{ ansible_facts.user_dir }}/.config/nvim"
+nvim_data_dir: "{{ ansible_facts.user_dir }}/.local/share/nvim"
+nvim_backup_root: "{{ ansible_facts.user_dir }}/.remote-dev-backup"
+nvim_profile: omarchy-compatible
+nvim_managed_marker: "{{ nvim_config_dir }}/.remote-dev-managed"
+nvim_sync_plugins: true
+nvim_install_treesitter_parsers: true
+nvim_treesitter_languages:
+  - bash
+  - c
+  - diff
+  - html
+  - javascript
+  - jsdoc
+  - json
+  - lua
+  - luadoc
+  - luap
+  - markdown
+  - markdown_inline
+  - printf
+  - python
+  - query
+  - regex
+  - toml
+  - tsx
+  - typescript
+  - vim
+  - vimdoc
+  - xml
+  - yaml
+nvim_install_font: true
+nvim_font_url: "https://github.com/ryanoasis/nerd-fonts/releases/download/v3.3.0/JetBrainsMono.zip"
+nvim_font_dir: "{{ ansible_facts.user_dir }}/.local/share/fonts/JetBrainsMono"

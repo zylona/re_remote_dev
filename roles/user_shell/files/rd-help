@@ -1,0 +1,99 @@
+#!/bin/sh
+set -eu
+
+usage() {
+  cat <<'EOF'
+rd-help - remote-dev 会话帮助
+
+用法:
+  rd-help              显示当前会话状态和全部常用提示
+  rd-help codex        生成一次性 Codex 浏览器登录回调转发命令
+  rd-help proxy        生成并检查可复用的 HTTP 代理转发命令
+  rd-help status       检查 SSH 会话地址和端口
+
+说明:
+  普通 SSH 登录不会自动占用本机 1455 端口。需要 Codex 首次网页登录时，
+  在本机另开终端执行本命令输出的 ssh -fNT 命令，然后在本会话执行 codex login。
+  登录完成后按输出的命令清理临时转发。日常 Codex 网络流量使用当前会话的
+  远程 4227 HTTP 代理转发。需要代理时，在本机另开终端执行 rd-help proxy 输出的
+  ssh -fNT 命令；同一台主机的多个 SSH 会话可以共享这个后台链接。
+EOF
+}
+
+command_name=${1:-all}
+session_client= session_server= session_user=${USER:-$(id -un 2>/dev/null || printf unknown)}
+if [ -n "${SSH_CONNECTION:-}" ]; then
+  # SSH_CONNECTION: client_ip client_port server_ip server_port
+  set -- $SSH_CONNECTION
+  session_client=${1:-}
+  session_server=${3:-}
+fi
+
+show_status() {
+  printf '%s\n' 'remote-dev 会话状态'
+  printf '  远程用户: %s\n' "$session_user"
+  printf '  远程地址: %s\n' "${session_server:-未知（请手工替换命令中的主机名/IP）}"
+  printf '  本地地址: %s\n' "${session_client:-未知（非 SSH 会话）}"
+  if command -v ss >/dev/null 2>&1; then
+    if ss -ltn 2>/dev/null | awk '$4 ~ /:4227$/ { found=1 } END { exit !found }'; then
+      printf '%s\n' '  远程 4227: 正在监听（代理转发可能可用）'
+    else
+      printf '%s\n' '  远程 4227: 未检测到监听器'
+    fi
+    if ss -ltn 2>/dev/null | awk '$4 ~ /:1455$/ { found=1 } END { exit !found }'; then
+      printf '%s\n' '  远程 1455: 正在监听（本机回调转发的目标端口）'
+    else
+      printf '%s\n' '  远程 1455: 未监听（正常；由本机临时 -L 建立）'
+    fi
+  fi
+}
+
+show_proxy() {
+  printf '%s\n' '代理检查'
+  if [ -z "$session_server" ]; then
+    host='<远程主机>'
+    printf '%s\n' '  无法从 SSH_CONNECTION 获取远程地址，请手工替换 <远程主机>。'
+  else
+    host=$session_server
+  fi
+  printf '  当前 HTTP_PROXY: %s\n' "${HTTP_PROXY:-${http_proxy:-未设置}}"
+  printf '%s\n' '  本机终端执行（后台共享转发）：'
+  printf '     ssh -fNT -o ExitOnForwardFailure=yes -o ServerAliveInterval=30 -o ServerAliveCountMax=3 -o ControlMaster=no -o ControlPath=none -R 127.0.0.1:4227:127.0.0.1:4227 %s@%s\n' "$session_user" "$host"
+  printf '%s\n' '  多个 SSH 会话可复用同一个后台转发；不要重复执行。'
+  printf '  清理：pgrep -af "ssh.*-R 127.0.0.1:4227:127.0.0.1:4227.*%s@%s" && kill <PID>\n' "$session_user" "$host"
+  if command -v curl >/dev/null 2>&1; then
+    if curl --silent --show-error --max-time 5 --proxy "${HTTP_PROXY:-${http_proxy:-http://127.0.0.1:4227}}" -I https://example.com >/dev/null 2>&1; then
+      printf '%s\n' '  连通性: OK（curl 通过当前代理访问 example.com）'
+    else
+      printf '%s\n' '  连通性: 失败（先在本机执行上面的 -R 4227 命令，再重试 rd-help proxy）'
+    fi
+  else
+    printf '%s\n' '  连通性: 未检查（远端缺少 curl）'
+  fi
+}
+
+show_codex() {
+  show_status
+  printf '\n%s\n' 'Codex 一次性浏览器登录'
+  if [ -z "$session_server" ]; then
+    printf '%s\n' '  无法从 SSH_CONNECTION 获取远程地址，请手工替换 <远程主机>。'
+    host='<远程主机>'
+  else
+    host=$session_server
+  fi
+  printf '%s\n' '  1. 在本机终端（不是远程 shell）执行：'
+  printf '     ssh -fNT -o ExitOnForwardFailure=yes -o ServerAliveInterval=30 -o ServerAliveCountMax=3 -o ControlMaster=no -o ControlPath=none -L 1455:127.0.0.1:1455 %s@%s\n' "$session_user" "$host"
+  printf '%s\n' '  2. 回到本会话执行：codex login，然后选择 Sign in with ChatGPT。'
+  printf '%s\n' '  3. 浏览器回调完成后，在本机查找并结束临时隧道：'
+  printf '     pgrep -af "ssh.*-L 1455:127.0.0.1:1455.*%s@%s"\n' "$session_user" "$host"
+  printf '%s\n' '     kill <上一步显示的 PID>'
+  printf '%s\n' '  注意：1455 是一次性 OAuth 回调端口，同一时间只为一个登录流程建立转发。'
+}
+
+case "$command_name" in
+  all|-h|--help) usage; printf '\n'; show_status; printf '\n'; show_proxy; printf '\n'; show_codex ;;
+  status) show_status ;;
+  proxy) show_proxy ;;
+  codex) show_codex ;;
+  *) usage >&2; exit 2 ;;
+esac

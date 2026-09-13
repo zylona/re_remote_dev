@@ -1,0 +1,8 @@
+---
+- name: P3 用户 Shell 与本机习惯
+  hosts: remote_dev_targets
+  gather_facts: true
+  become: true
+  become_user: "{{ remote_dev.target_user }}"
+  roles:
+    - user_shell

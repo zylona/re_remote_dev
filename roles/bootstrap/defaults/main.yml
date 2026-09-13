@@ -1,0 +1,10 @@
+---
+bootstrap_required_commands:
+  - python3
+  - sshd
+  - zsh
+  - git
+  - curl
+  - tar
+  - unzip
+  - tmux

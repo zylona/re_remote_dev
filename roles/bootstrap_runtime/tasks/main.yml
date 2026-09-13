@@ -1,0 +1,94 @@
+---
+- name: 无 Python 阶段识别系统与包管理器
+  ansible.builtin.raw: >-
+    set -eu;
+    if command -v apt-get >/dev/null 2>&1; then echo apt;
+    elif command -v dnf >/dev/null 2>&1; then echo dnf;
+    elif command -v yum >/dev/null 2>&1; then echo yum;
+    elif command -v apk >/dev/null 2>&1; then echo apk;
+    elif command -v pacman >/dev/null 2>&1; then echo pacman;
+    elif command -v zypper >/dev/null 2>&1; then echo zypper;
+    else echo unsupported; fi
+  become: true
+  register: bootstrap_runtime_manager
+  changed_when: false
+
+- name: 拒绝无法自动安装的系统
+  ansible.builtin.assert:
+    that: (bootstrap_runtime_manager.stdout | regex_search('apt|dnf|yum|apk|pacman|zypper')) is not none
+    fail_msg: >-
+      无法识别目标机包管理器。项目支持 apt、dnf/yum、apk、pacman、zypper；
+      请安装其中一种包管理器，或预先提供 Python3 与基础工具后重试。
+
+- name: 修复 Debian 初始 cdrom 源（仅在没有网络源时）
+  ansible.builtin.raw: >-
+    set -eu;
+    if ! command -v apt-get >/dev/null 2>&1; then exit 0; fi;
+    if ! grep -RqsE '^[[:space:]]*deb[[:space:]]+cdrom:' /etc/apt/sources.list /etc/apt/sources.list.d 2>/dev/null
+    && [ ! -f /etc/apt/sources.list.d/remote-dev-official.list ]; then exit 0; fi;
+    codename=$(sed -n 's/^VERSION_CODENAME=//p' /etc/os-release | tr -d '"' | head -1);
+    [ -n "$codename" ] || codename=stable;
+    tmp=$(mktemp);
+    mirror={{ bootstrap_runtime_apt_mirror | quote }};
+    printf 'deb %s %s main\n' "$mirror" "$codename" > "$tmp";
+    printf 'deb %s %s-updates main\n' "$mirror" "$codename" >> "$tmp";
+    security_mirror={{ bootstrap_runtime_apt_security_mirror | quote }};
+    printf 'deb %s %s-security main\n' "$security_mirror" "$codename" >> "$tmp";
+    if ! cmp -s "$tmp" /etc/apt/sources.list.d/remote-dev-official.list 2>/dev/null
+    || grep -RqsE '^[[:space:]]*deb[[:space:]]+cdrom:' /etc/apt/sources.list /etc/apt/sources.list.d 2>/dev/null; then
+      stamp=$(date +%Y%m%d%H%M%S);
+      [ -f /etc/apt/sources.list ] && cp -p /etc/apt/sources.list "/etc/apt/sources.list.remote-dev.$stamp.bak" || true;
+      sed -i -E '/^[[:space:]]*deb[[:space:]]+cdrom:/s/^/# remote-dev disabled: /' /etc/apt/sources.list 2>/dev/null || true;
+      find /etc/apt/sources.list.d -type f -name '*.list' -print0 2>/dev/null |
+        xargs -0 -r sed -i -E '/^[[:space:]]*deb[[:space:]]+cdrom:/s/^/# remote-dev disabled: /';
+      install -m 0644 "$tmp" /etc/apt/sources.list.d/remote-dev-official.list;
+      echo remote-dev-apt-sources-repaired;
+    fi;
+    rm -f "$tmp";
+  become: true
+  register: bootstrap_runtime_sources
+  changed_when: "'remote-dev-apt-sources-repaired' in bootstrap_runtime_sources.stdout"
+
+- name: 无 Python 阶段按包管理器安装运行时基础工具
+  ansible.builtin.raw: |
+    set -eu;
+    {% if remote_dev_temp_proxy_url is defined %}
+    export http_proxy={{ remote_dev_temp_proxy_url | quote }} https_proxy={{ remote_dev_temp_proxy_url | quote }}
+    HTTP_PROXY={{ remote_dev_temp_proxy_url | quote }} HTTPS_PROXY={{ remote_dev_temp_proxy_url | quote }};
+    {% endif %}
+    missing='';
+    for p in {{ bootstrap_runtime_packages | join(' ') }}; do
+      case "$p" in python3) c="python3";; openssh-server) c="sshd";; bubblewrap) c="bwrap";; *) c="$p";; esac;
+      if [ "$p" = ca-certificates ]; then
+        test -f /etc/ssl/certs/ca-bundle.crt || test -f /etc/ssl/certs/ca-certificates.crt || missing="$missing $p";
+      else
+        command -v "$c" >/dev/null 2>&1 || missing="$missing $p";
+      fi;
+    done;
+    if [ -z "$missing" ]; then echo remote-dev-runtime-ready; exit 0; fi;
+    case '{{ bootstrap_runtime_manager.stdout | regex_search("apt|dnf|yum|apk|pacman|zypper") | default("unsupported", true) }}' in
+      apt) apt-get -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20 update -qq;
+      DEBIAN_FRONTEND=noninteractive apt-get -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20 install -y --no-install-recommends $missing;;
+      dnf) dnf install -y $missing;;
+      yum) yum install -y $missing;;
+      apk) apk add --no-cache $missing;;
+      pacman) pacman -Sy --noconfirm $missing;;
+      zypper) zypper --non-interactive install --no-recommends $missing;;
+    esac;
+  become: true
+  register: bootstrap_runtime_install
+  changed_when: "'remote-dev-runtime-ready' not in bootstrap_runtime_install.stdout"
+- name: 重置连接以加载新安装的 Python
+  ansible.builtin.meta: reset_connection
+
+- name: 为目标用户配置 sudoers（sudo 初始不存在时）
+  ansible.builtin.copy:
+    content: "{{ remote_dev.target_user }} ALL=(ALL:ALL) ALL\n"
+    dest: "/etc/sudoers.d/remote-dev-{{ remote_dev.target_user }}"
+    owner: root
+    group: root
+    mode: '0440'
+    validate: '/usr/sbin/visudo -cf %s'
+  become: true
+  when:
+    - ansible_become_method | default('sudo') == 'su'

@@ -1,0 +1,9 @@
+---
+- name: P0 配置预检
+  hosts: remote_dev_targets
+  gather_facts: true
+  vars:
+    # 连接只使用 Inventory 提供的 SSH 私钥；不读取密码凭据文件。
+    ansible_ssh_private_key_file: "{{ remote_dev.ssh_private_key_file }}"
+  roles:
+    - preflight

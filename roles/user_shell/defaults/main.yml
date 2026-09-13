@@ -1,0 +1,7 @@
+---
+user_shell_antidote_repo: https://github.com/mattmc3/antidote.git
+user_shell_antidote_version: v1.9.7
+user_shell_home: "{{ ansible_facts.user_dir }}"
+user_shell_p10k_source: "{{ lookup('env', 'HOME') }}/.p10k.zsh"
+user_shell_proxy_port: 4227
+user_shell_proxy_probe_url: https://example.com/

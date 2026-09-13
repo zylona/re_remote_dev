@@ -1,0 +1,7 @@
+---
+- name: P2 Docker daemon 会话代理
+  hosts: remote_dev_targets
+  gather_facts: true
+  become: true
+  roles:
+    - docker_proxy

@@ -1,0 +1,11 @@
+[Unit]
+Description=remote-dev local orchestrator socket
+
+[Socket]
+ListenStream=%t/remote-dev/orchestrator.sock
+SocketMode=0600
+DirectoryMode=0700
+RemoveOnStop=yes
+
+[Install]
+WantedBy=sockets.target

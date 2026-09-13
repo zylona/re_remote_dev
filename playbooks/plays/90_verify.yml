@@ -1,0 +1,79 @@
+---
+- name: P0 只读验收
+  hosts: remote_dev_targets
+  gather_facts: true
+  become: true
+  become_user: "{{ remote_dev.target_user }}"
+  vars:
+    ansible_ssh_private_key_file: "{{ remote_dev.ssh_private_key_file }}"
+  tasks:
+    - name: 确认目标为 Linux
+      ansible.builtin.assert:
+        that: ansible_system == 'Linux'
+        fail_msg: "当前项目只支持 Linux 目标。"
+    - name: 输出目标事实摘要
+      ansible.builtin.debug:
+        msg:
+          host: "{{ inventory_hostname }}"
+          distribution: "{{ ansible_distribution }}"
+          architecture: "{{ ansible_architecture }}"
+          target_user: "{{ remote_dev.target_user }}"
+    - name: 探测 Docker daemon 是否存在（只读）
+      ansible.builtin.command:
+        argv: [systemctl, show, docker.service, --property=LoadState, --value]
+      register: verify_docker_load_state
+      changed_when: false
+      failed_when: false
+    - name: 读取 Docker daemon 实际生效配置（只读）
+      ansible.builtin.command:
+        argv: [docker, info]
+      register: verify_docker_info
+      changed_when: false
+      failed_when: false
+      when: verify_docker_load_state.stdout | default('') | trim == 'loaded'
+      become: true
+      become_user: root
+    - name: 输出 Docker daemon 代理验收状态
+      ansible.builtin.debug:
+        msg: >-
+          {{ 'NOT_APPLICABLE: 未发现 systemd Docker daemon' if
+             verify_docker_load_state.stdout | default('') | trim != 'loaded' else
+             ('READY' if
+               ('HTTP Proxy: http://127.0.0.1:' ~ (remote_dev.proxy.port | default(4227) | string))
+               in (verify_docker_info.stdout | default('')) else
+              'FAILED: Docker daemon 未加载 remote-dev loopback 代理') }}
+    - name: 验证 Codex CLI（只读）
+      ansible.builtin.command:
+        argv: ["{{ ansible_facts.user_dir }}/.local/bin/codex", --version]
+      register: codex_verify
+      changed_when: false
+      failed_when: false
+      environment:
+        HOME: "{{ ansible_facts.user_dir }}"
+        CODEX_HOME: "{{ ansible_facts.user_dir }}/.codex"
+    - name: 验证 Codex bubblewrap 沙箱依赖（只读）
+      ansible.builtin.command:
+        argv: [bwrap, --version]
+      register: bubblewrap_verify
+      changed_when: false
+      failed_when: false
+    - name: 输出 Codex 验收状态
+      ansible.builtin.debug:
+        msg: >-
+          {{ 'READY' if codex_verify.rc == 0 and bubblewrap_verify.rc == 0 else
+          ('READY_WITH_WARNINGS: 缺少 bubblewrap/bwrap' if codex_verify.rc == 0 else
+          'FAILED: Codex CLI 未安装或不可执行；请先运行 site.yml') }}
+    - name: 验证 Neovim 配置加载（只读）
+      ansible.builtin.command:
+        argv: [timeout, 60, nvim, --headless, -u, "{{ ansible_facts.user_dir }}/.config/nvim/init.lua", "+qa!"]
+      register: nvim_verify
+      changed_when: false
+      failed_when: false
+      environment:
+        HOME: "{{ ansible_facts.user_dir }}"
+        PATH: "{{ ansible_facts.user_dir }}/.local/bin:/usr/local/bin:/usr/bin:/bin"
+    - name: 输出 Neovim 验收状态
+      ansible.builtin.debug:
+        msg: >-
+          {{ 'READY' if nvim_verify.rc == 0 else
+          'READY_WITH_WARNINGS: Neovim 配置或插件未完整加载' }}

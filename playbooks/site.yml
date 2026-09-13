@@ -1,0 +1,19 @@
+---
+- name: P0 无 Python 运行时 bootstrap
+  import_playbook: plays/05_bootstrap_runtime.yml
+- name: P0 配置预检
+  import_playbook: plays/00_preflight.yml
+- name: P2 基础系统 bootstrap
+  import_playbook: plays/10_bootstrap.yml
+- name: P2 Docker daemon 会话代理
+  import_playbook: plays/15_docker_proxy.yml
+- name: P3 用户 Shell 与本机习惯
+  import_playbook: plays/20_user_shell.yml
+- name: P4 工具与工作区前置验证
+  import_playbook: plays/30_tools.yml
+- name: P5 Codex CLI 恢复
+  import_playbook: plays/40_codex.yml
+- name: P9 Neovim IDE
+  import_playbook: plays/50_nvim.yml
+- name: P0 只读验收
+  import_playbook: plays/90_verify.yml

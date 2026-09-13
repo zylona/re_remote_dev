@@ -1,0 +1,7 @@
+---
+galaxy_info:
+  author: remote-dev
+  description: Bootstrap Python and portable prerequisites without a Python interpreter
+  license: MIT
+  min_ansible_version: '2.15'
+dependencies: []

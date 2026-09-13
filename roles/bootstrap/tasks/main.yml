@@ -1,0 +1,23 @@
+---
+- name: 检查 P2 必备命令（用户需预先安装）
+  ansible.builtin.command:
+    argv: [sh, -c, "command -v {{ item }}"]
+  loop: "{{ bootstrap_required_commands }}"
+  register: bootstrap_required_check
+  changed_when: false
+  failed_when: false
+  environment:
+    PATH: "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+- name: 缺少必备软件时直接失败
+  ansible.builtin.assert:
+    that:
+      - (bootstrap_required_check.results | selectattr('rc', 'ne', 0) | list | length) == 0
+    fail_msg: >-
+      目标机缺少 P2 必备命令：{{ bootstrap_required_check.results
+      | selectattr('rc', 'ne', 0) | map(attribute='item') | list | join(', ') }}。
+      请由用户按发行版自行安装后重试；项目不会猜测包名或修改软件源。
+- name: 验证目标用户 sudo 提权
+  ansible.builtin.command:
+    argv: ['true']
+  become: true
+  changed_when: false

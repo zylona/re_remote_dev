@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+set -euo pipefail
+pkg_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+version="$(tr -d '[:space:]' < "$pkg_dir/VERSION")"
+base="${XDG_DATA_HOME:-$HOME/.local/share}/remote-dev-orchestrator"
+target="$base/versions/$version"
+mkdir -p "$base/versions"
+rm -rf "$target"
+cp -a "$pkg_dir/." "$target/"
+ln -sfn "$target" "$base/current"
+bin_dir="${XDG_BIN_HOME:-$HOME/.local/bin}"
+mkdir -p "$bin_dir"
+ln -sfn "$base/current/bin/remote-dev-orchestrator-server" "$bin_dir/remote-dev-orchestrator-server"
+unit_dir="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
+mkdir -p "$unit_dir"
+sed "s#^ExecStart=.*#ExecStart=$base/current/bin/remote-dev-orchestrator-server#" "$pkg_dir/remote-dev-orchestrator.service" > "$unit_dir/remote-dev-orchestrator.service"
+cp "$pkg_dir/remote-dev-orchestrator.socket" "$unit_dir/remote-dev-orchestrator.socket"
+systemctl --user daemon-reload
+systemctl --user enable --now remote-dev-orchestrator.socket
+systemctl --user restart remote-dev-orchestrator.service
+echo "remote-dev-orchestrator $version installed; ensure $bin_dir is on PATH"

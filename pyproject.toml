@@ -1,0 +1,38 @@
+[project]
+name = "remote-dev"
+version = "0.1.0"
+description = "Ansible-first SSH remote development environment bootstrap"
+readme = "README.md"
+requires-python = ">=3.14,<3.15"
+dependencies = [
+  "rich==15.0.0",
+  "ruamel-yaml==0.19.1",
+  "structlog==26.1.0",
+  "textual==8.2.8",
+  "typer==0.27.1",
+]
+
+[project.scripts]
+remote-dev = "remote_dev.cli:app"
+
+[dependency-groups]
+# 与 re_debian 当前验证过的工具链保持一致。
+dev = [
+  "ansible-core==2.21.3",
+  "ansible-lint==26.8.0",
+  "molecule==25.6.0",
+  "molecule-plugins==23.5.0",
+  "pytest==9.1.1",
+  "pytest-testinfra==10.2.2",
+]
+
+[tool.pytest.ini_options]
+addopts = "-ra"
+testpaths = ["tests"]
+
+[tool.uv]
+default-groups = ["dev"]
+
+[build-system]
+requires = ["uv_build>=0.12.7,<0.13.0"]
+build-backend = "uv_build"

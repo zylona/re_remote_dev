@@ -1,0 +1,16 @@
+[tools]
+python = "3.14.7"
+uv = "latest"
+ansible = "latest"
+shellcheck = "latest"
+
+[settings]
+python.uv_venv_auto = "create|source"
+
+[tasks.sync]
+description = "同步锁定的 Python 开发依赖"
+run = "uv sync --locked"
+
+[tasks.check]
+description = "运行发布前配置、语法、lint 和单元检查"
+run = "./scripts/release_check.sh"

@@ -1,0 +1,6 @@
+---
+docker_proxy_enabled: true
+docker_proxy_url: "http://127.0.0.1:{{ remote_dev.proxy.port | default(4227) }}"
+docker_proxy_no_proxy: "localhost,127.0.0.1,::1"
+docker_proxy_dropin: /etc/systemd/system/docker.service.d/remote-dev-proxy.conf
+docker_proxy_daemon_config_path: /etc/docker/daemon.json

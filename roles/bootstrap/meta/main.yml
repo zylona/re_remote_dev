@@ -1,0 +1,7 @@
+---
+galaxy_info:
+  author: remote-dev
+  description: Install minimal system dependencies
+  license: MIT
+  min_ansible_version: '2.17'
+dependencies: []

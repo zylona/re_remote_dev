@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+if ! command -v uv >/dev/null 2>&1; then
+  printf '[fail] 未找到 uv，请先执行 mise install 或安装 uv。\n' >&2
+  exit 127
+fi
+
+cd "$SCRIPT_DIR"
+exec uv run --locked remote-dev "$@"

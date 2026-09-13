@@ -1,0 +1,9 @@
+---
+- name: P4 工具与工作区前置验证
+  hosts: remote_dev_targets
+  gather_facts: true
+  become: true
+  become_user: "{{ remote_dev.target_user }}"
+  roles:
+    - tools
+    - workspace

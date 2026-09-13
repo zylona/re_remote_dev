@@ -1,0 +1,275 @@
+---
+- name: 检查 Codex 安装器基础命令
+  ansible.builtin.command:
+    argv: [sh, -c, "command -v {{ item }}"]
+  loop: [curl, sh]
+  register: codex_prereq_check
+  changed_when: false
+  failed_when: false
+
+- name: 缺少 Codex 安装器基础命令时失败
+  ansible.builtin.assert:
+    that: (codex_prereq_check.results | selectattr('rc', 'ne', 0) | list | length) == 0
+    fail_msg: >-
+      目标机缺少 Codex CLI 安装所需命令：{{ codex_prereq_check.results
+      | selectattr('rc', 'ne', 0) | map(attribute='item') | list | join(', ') }}。
+      请用户安装 curl 和 POSIX sh 后重试。
+
+- name: 创建 Codex 用户目录
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    mode: '0755'
+  loop:
+    - "{{ codex_install_dir }}"
+    - "{{ codex_libexec_dir }}"
+    - "{{ codex_home }}"
+    - "{{ codex_cache_dir }}"
+
+- name: 迁移旧版 Codex 二进制到受管真实路径
+  ansible.builtin.stat:
+    path: "{{ codex_real_binary }}"
+  register: codex_real_before
+
+- name: 检查旧版 Codex 路径
+  ansible.builtin.stat:
+    path: "{{ codex_shim }}"
+  register: codex_legacy_before
+
+- name: 移动旧版 Codex 二进制到受管真实路径
+  ansible.builtin.command:
+    argv: [mv, "{{ codex_install_dir }}/codex", "{{ codex_real_binary }}"]
+  when:
+    - codex_real_binary != codex_shim
+    - not codex_real_before.stat.exists
+    - codex_legacy_before.stat.exists
+  changed_when: true
+
+- name: 确保 Codex 本地配置文件存在
+  ansible.builtin.file:
+    path: "{{ codex_home }}/config.toml"
+    state: touch
+    owner: "{{ remote_dev.target_user }}"
+    mode: '0600'
+    modification_time: preserve
+  register: codex_config_file
+  changed_when: false
+
+- name: 检查 Codex 本地配置的 TUI 表段
+  ansible.builtin.shell:
+    cmd: >-
+      if [ -f "{{ codex_home }}/config.toml" ] && grep -q '^\[tui\]$' "{{ codex_home }}/config.toml";
+      then echo root; elif [ -f "{{ codex_home }}/config.toml" ] && grep -q '^\[tui\.' "{{ codex_home }}/config.toml";
+      then echo child; else echo absent; fi
+  register: codex_tui_table
+  changed_when: false
+
+- name: 检查 Codex 状态栏是否已配置
+  ansible.builtin.shell:
+    cmd: >-
+      grep -q '^status_line[[:space:]]*=' "{{ codex_home }}/config.toml" 2>/dev/null
+  register: codex_status_line_existing
+  changed_when: false
+  failed_when: false
+
+- name: 写入本机兼容 Codex 状态栏（已有 TUI 表段）
+  ansible.builtin.lineinfile:
+    path: "{{ codex_home }}/config.toml"
+    insertafter: '^\[tui\]$'
+    line: "status_line = {{ codex_status_line | to_json }}"
+    owner: "{{ remote_dev.target_user }}"
+    mode: '0600'
+  when:
+    - codex_tui_table.stdout | trim == 'root'
+    - codex_status_line_existing.rc != 0
+
+- name: 写入本机兼容 Codex 状态栏（只有 TUI 子表段）
+  ansible.builtin.blockinfile:
+    path: "{{ codex_home }}/config.toml"
+    insertbefore: '^\[tui\.'
+    marker: '# {mark} remote-dev tui defaults'
+    block: |
+      [tui]
+      status_line = {{ codex_status_line | to_json }}
+      terminal_title = {{ codex_terminal_title | to_json }}
+      status_line_use_colors = true
+    owner: "{{ remote_dev.target_user }}"
+    mode: '0600'
+  when:
+    - codex_tui_table.stdout | trim == 'child'
+    - codex_status_line_existing.rc != 0
+
+- name: 写入本机兼容 Codex 状态栏（无 TUI 表段）
+  ansible.builtin.blockinfile:
+    path: "{{ codex_home }}/config.toml"
+    marker: '# {mark} remote-dev tui defaults'
+    block: |
+      [tui]
+      status_line = {{ codex_status_line | to_json }}
+      terminal_title = {{ codex_terminal_title | to_json }}
+      status_line_use_colors = true
+    owner: "{{ remote_dev.target_user }}"
+    mode: '0600'
+  when:
+    - codex_tui_table.stdout | trim == 'absent'
+    - codex_status_line_existing.rc != 0
+
+- name: 下载官方 Codex 安装器
+  ansible.builtin.get_url:
+    url: "{{ codex_install_url }}"
+    dest: "{{ codex_install_script }}"
+    mode: '0700'
+    checksum: "{{ ('sha256:' ~ codex_install_sha256) if codex_install_sha256 | length > 0 else omit }}"
+  register: codex_installer_download
+  environment:
+    http_proxy: "{{ remote_dev_temp_proxy_url | default(omit) }}"
+    https_proxy: "{{ remote_dev_temp_proxy_url | default(omit) }}"
+    HTTP_PROXY: "{{ remote_dev_temp_proxy_url | default(omit) }}"
+    HTTPS_PROXY: "{{ remote_dev_temp_proxy_url | default(omit) }}"
+
+- name: 检查 Codex 二进制
+  ansible.builtin.stat:
+    path: "{{ codex_real_binary }}"
+  register: codex_binary
+
+- name: 执行官方 Codex 安装器
+  ansible.builtin.command:
+    argv: [sh, "{{ codex_install_script }}"]
+  environment:
+    HOME: "{{ ansible_facts.user_dir }}"
+    CODEX_INSTALL_DIR: "{{ codex_libexec_dir }}"
+    CODEX_NON_INTERACTIVE: '1'
+    http_proxy: "{{ remote_dev_temp_proxy_url | default(omit) }}"
+    https_proxy: "{{ remote_dev_temp_proxy_url | default(omit) }}"
+    HTTP_PROXY: "{{ remote_dev_temp_proxy_url | default(omit) }}"
+    HTTPS_PROXY: "{{ remote_dev_temp_proxy_url | default(omit) }}"
+  register: codex_install_result
+  changed_when: codex_install_result.rc == 0
+  when: codex_installer_download.changed or not codex_binary.stat.exists
+
+- name: 清理官方安装器对 libexec PATH 的注入
+  ansible.builtin.replace:
+    path: "{{ ansible_facts.user_dir }}/.zshrc"
+    regexp: '(?ms)^# >>> Codex installer >>>\n.*?^# <<< Codex installer <<<\n?'
+    replace: ''
+  # 官方安装器把真实二进制目录放到 PATH 首位会绕过项目 shim；项目通过
+  # ~/.local/bin/codex 统一捕获 Codex 生命周期事件，因此只保留该入口。
+  register: codex_path_cleanup
+
+- name: 验证 Codex CLI 可执行
+  ansible.builtin.command:
+    argv: ["{{ codex_real_binary }}", --version]
+  environment:
+    HOME: "{{ ansible_facts.user_dir }}"
+    CODEX_HOME: "{{ codex_home }}"
+  register: codex_version
+  changed_when: false
+  failed_when: false
+
+- name: Codex CLI 安装失败时给出明确提示
+  ansible.builtin.assert:
+    that: codex_version.rc == 0
+    fail_msg: >-
+      Codex CLI 未能正常启动（{{ codex_version.stderr | default('无错误输出') }}）。
+      请检查官方安装器输出、目标架构和 {{ codex_install_dir }} 权限。
+
+- name: 部署 Codex 编排事件发送器
+  ansible.builtin.copy:
+    src: remote-dev-codex-event.py
+    dest: "{{ codex_libexec_dir }}/remote-dev-codex-event.py"
+    mode: '0755'
+
+- name: 部署 Codex OAuth URL PTY 捕获器
+  ansible.builtin.copy:
+    src: remote-dev-codex-pty.py
+    dest: "{{ codex_libexec_dir }}/remote-dev-codex-pty.py"
+    mode: '0755'
+
+- name: 部署 Codex 启动 shim
+  ansible.builtin.template:
+    src: codex-shim.sh.j2
+    dest: "{{ codex_shim }}"
+    mode: '0755'
+    owner: "{{ remote_dev.target_user }}"
+
+- name: 探测目标用户现有 academic-search MCP
+  ansible.builtin.command:
+    argv: ["{{ codex_install_dir }}/codex", mcp, get, academic-search]
+  environment:
+    HOME: "{{ ansible_facts.user_dir }}"
+    CODEX_HOME: "{{ codex_home }}"
+    PATH: "{{ codex_install_dir }}:/usr/local/bin:/usr/bin:/bin"
+  register: codex_academic_search_probe
+  changed_when: false
+  failed_when: false
+  when: codex_repair_academic_search | bool
+
+- name: 检查 academic-search MCP 服务器文件
+  ansible.builtin.stat:
+    path: "{{ ansible_facts.user_dir }}/.codex/skills/nature-academic-search/mcp-server/academic_search_server.py"
+  register: codex_academic_search_server
+  when:
+    - codex_repair_academic_search | bool
+    - codex_academic_search_probe.rc | default(1) | int == 0
+
+- name: 探测目标用户 uv 可执行文件
+  ansible.builtin.shell: # noqa command-instead-of-shell
+    cmd: >-
+      command -v uv 2>/dev/null ||
+      find "{{ ansible_facts.user_dir }}/.local/share/mise/installs/uv"
+      -type f -name uv -perm -111 2>/dev/null | sort | tail -n 1
+  args:
+    executable: /bin/sh
+  register: codex_academic_search_uv
+  changed_when: false
+  failed_when: false
+  # noqa risky-shell-pipe - /bin/sh on supported targets has no pipefail; the
+  # pipeline is read-only discovery and every failure is explicitly ignored.
+  when:
+    - codex_repair_academic_search | bool
+    - codex_academic_search_probe.rc | default(1) | int == 0
+    - codex_academic_search_server.stat.exists | default(false) | bool
+
+- name: 重建已安装的 academic-search MCP（按目标用户路径）
+  ansible.builtin.command:
+    argv:
+      - "{{ codex_install_dir }}/codex"
+      - mcp
+      - add
+      - academic-search
+      - --
+      - "{{ codex_academic_search_uv.stdout | trim }}"
+      - run
+      - --no-project
+      - --directory
+      - "{{ ansible_facts.user_dir }}/.codex/skills/nature-academic-search/mcp-server"
+      - --with
+      - "mcp>=1.0.0,<2.0.0"
+      - --with
+      - "requests>=2.28.0,<3.0.0"
+      - --with
+      - "toml>=0.10.2,<2.0.0"
+      - --with
+      - "lxml>=4.9.0,<6.0.0"
+      - --with
+      - "pybliometrics>=4.4.1,<5.0.0"
+      - python
+      - academic_search_server.py
+  environment:
+    HOME: "{{ ansible_facts.user_dir }}"
+    CODEX_HOME: "{{ codex_home }}"
+    PATH: "{{ codex_install_dir }}:/usr/local/bin:/usr/bin:/bin"
+  register: codex_academic_search_repair
+  changed_when: true
+  when:
+    - codex_repair_academic_search | bool
+    - codex_academic_search_probe.rc | default(1) | int == 0
+    - codex_academic_search_server.stat.exists | default(false) | bool
+    - (codex_academic_search_uv.stdout | default('') | trim | length) > 0
+
+- name: Academic-search 未安装时跳过修复
+  ansible.builtin.debug:
+    msg: "目标用户未安装 academic-search MCP，跳过可选修复。"
+  when:
+    - codex_repair_academic_search | bool
+    - codex_academic_search_probe.rc | default(1) | int != 0

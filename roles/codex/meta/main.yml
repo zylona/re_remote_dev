@@ -1,0 +1,7 @@
+---
+galaxy_info:
+  author: remote-dev
+  description: Install and verify the official OpenAI Codex CLI
+  license: MIT
+  min_ansible_version: '2.15'
+dependencies: []

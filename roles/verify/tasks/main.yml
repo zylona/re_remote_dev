@@ -1,0 +1,5 @@
+---
+- name: 验证目标系统
+  ansible.builtin.assert:
+    that: ansible_system == 'Linux'
+    fail_msg: "目标系统不是 Linux。"

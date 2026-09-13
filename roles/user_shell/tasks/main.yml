@@ -1,0 +1,147 @@
+---
+- name: 校验目标用户与必备命令
+  ansible.builtin.assert:
+    that:
+      - remote_dev.target_user | length > 0
+    fail_msg: "目标用户配置不完整。"
+- name: 自动设置 zsh 为目标用户默认 Shell（无密码初始化）
+  ansible.builtin.user:
+    name: "{{ remote_dev.target_user }}"
+    shell: /usr/bin/zsh
+  when: (remote_dev.target_user_password | default('')) | length == 0
+  become: true
+  become_user: root
+- name: 自动设置 zsh 为目标用户默认 Shell（设置初始密码）
+  ansible.builtin.user:
+    name: "{{ remote_dev.target_user }}"
+    shell: /usr/bin/zsh
+    password: "{{ remote_dev.target_user_password | password_hash('sha512') }}"
+    update_password: on_create
+  when: (remote_dev.target_user_password | default('')) | length > 0
+  become: true
+  become_user: root
+  no_log: true
+- name: 创建 Shell 配置目录
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: "{{ remote_dev.target_user }}"
+    mode: '0755'
+  loop:
+    - "{{ user_shell_home }}/.local/bin"
+    - "{{ user_shell_home }}/.config"
+    - "{{ user_shell_home }}/.config/antidote"
+    - "{{ user_shell_home }}/.cache/antidote"
+    - "{{ user_shell_home }}/.cache/zsh"
+    - "{{ user_shell_home }}/.remote-dev-backup"
+- name: 检查 zshrc 原始备份
+  ansible.builtin.stat:
+    path: "{{ user_shell_home }}/.remote-dev-backup/.zshrc.original"
+  register: user_shell_backup_guard
+- name: 检查现有 zshrc
+  ansible.builtin.stat:
+    path: "{{ user_shell_home }}/.zshrc"
+  register: user_shell_zshrc
+- name: 备份现有 zshrc（仅首次）
+  ansible.builtin.copy:
+    src: "{{ user_shell_home }}/.zshrc"
+    dest: "{{ user_shell_home }}/.remote-dev-backup/.zshrc.original"
+    remote_src: true
+    owner: "{{ remote_dev.target_user }}"
+    mode: '0600'
+    force: false
+  when:
+    - not user_shell_backup_guard.stat.exists
+    - user_shell_zshrc.stat.exists
+  failed_when: false
+- name: 获取 Antidote
+  ansible.builtin.git:
+    repo: "{{ user_shell_antidote_repo }}"
+    version: "{{ user_shell_antidote_version }}"
+    dest: "{{ user_shell_home }}/.antidote"
+    depth: 1
+    update: true
+  environment:
+    http_proxy: "{{ remote_dev_temp_proxy_url | default(omit) }}"
+    https_proxy: "{{ remote_dev_temp_proxy_url | default(omit) }}"
+- name: 部署插件清单
+  ansible.builtin.copy:
+    src: zsh_plugins.txt
+    dest: "{{ user_shell_home }}/.zsh_plugins.txt"
+    owner: "{{ remote_dev.target_user }}"
+    mode: '0644'
+- name: 生成 Antidote 静态 bundle
+  ansible.builtin.shell:
+    cmd: >-
+      zsh -fc 'source "$HOME/.antidote/antidote.zsh";
+      antidote bundle < "$HOME/.zsh_plugins.txt" > "$HOME/.zsh_plugins.zsh"'
+    creates: "{{ user_shell_home }}/.zsh_plugins.zsh"
+  environment:
+    HOME: "{{ user_shell_home }}"
+    http_proxy: "{{ remote_dev_temp_proxy_url | default(omit) }}"
+    https_proxy: "{{ remote_dev_temp_proxy_url | default(omit) }}"
+- name: 部署 Powerlevel10k 配置
+  ansible.builtin.copy:
+    content: "{{ lookup('file', user_shell_p10k_source) }}"
+    dest: "{{ user_shell_home }}/.p10k.zsh"
+    owner: "{{ remote_dev.target_user }}"
+    mode: '0644'
+- name: 部署远程帮助入口
+  ansible.builtin.copy:
+    src: rd-help
+    dest: "{{ user_shell_home }}/.local/bin/rd-help"
+    owner: "{{ remote_dev.target_user }}"
+    mode: '0755'
+- name: 写入 zsh 受管配置区块
+  ansible.builtin.blockinfile:
+    path: "{{ user_shell_home }}/.zshrc"
+    create: true
+    owner: "{{ remote_dev.target_user }}"
+    mode: '0644'
+    marker: '# {mark} remote-dev'
+    block: |
+      export ZDOTDIR="${ZDOTDIR:-$HOME}"
+      export PATH="$HOME/.local/bin:$PATH"
+      if [[ -o interactive ]]; then
+        autoload -Uz compinit && compinit -C -d "$HOME/.cache/zsh/zcompdump"
+      fi
+      export HISTFILE="$HOME/.zsh_history"
+      export HISTSIZE=50000
+      export SAVEHIST=50000
+      setopt APPEND_HISTORY INC_APPEND_HISTORY SHARE_HISTORY
+      setopt HIST_IGNORE_DUPS HIST_IGNORE_ALL_DUPS HIST_EXPIRE_DUPS_FIRST HIST_FIND_NO_DUPS
+      # Make zsh-autosuggestions explicitly use the history backend.  Keep this
+      # before the Antidote bundle so the plugin sees the intended strategy.
+      typeset -ga ZSH_AUTOSUGGEST_STRATEGY=(history completion)
+      export ZSH_AUTOSUGGEST_HIGHLIGHT_STYLE='fg=8'
+      # Proxy forwarding is an on-demand background tunnel. Only export proxy
+      # variables when the shared remote listener is actually present.
+      if [[ -o interactive ]]; then
+      if command -v ss >/dev/null 2>&1 && timeout 1 ss -ltn 2>/dev/null | grep -Eq ':{{ user_shell_proxy_port }}([[:space:]]|$)'; then
+          export http_proxy="http://127.0.0.1:{{ user_shell_proxy_port }}"
+          export https_proxy="http://127.0.0.1:{{ user_shell_proxy_port }}"
+          export HTTP_PROXY="$http_proxy" HTTPS_PROXY="$https_proxy"
+          export no_proxy="127.0.0.1,localhost" NO_PROXY="$no_proxy"
+        else
+          unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY
+        fi
+      fi
+      if [[ -r "$HOME/.antidote/antidote.zsh" ]]; then
+        source "$HOME/.antidote/antidote.zsh"
+        if [[ -r "$HOME/.zsh_plugins.zsh" ]]; then
+          source "$HOME/.zsh_plugins.zsh"
+        else
+          antidote load "$HOME/.zsh_plugins.txt"
+        fi
+      fi
+      if [[ -r "$HOME/.p10k.zsh" ]]; then
+        source "$HOME/.p10k.zsh"
+      elif command -v starship >/dev/null 2>&1; then
+        eval "$(starship init zsh)"
+      fi
+      command -v mise >/dev/null 2>&1 && eval "$(mise activate zsh)"
+      command -v zoxide >/dev/null 2>&1 && eval "$(zoxide init zsh)"
+      if command -v fzf >/dev/null 2>&1; then
+        [[ -r /usr/share/doc/fzf/examples/completion.zsh ]] && source /usr/share/doc/fzf/examples/completion.zsh
+        [[ -r /usr/share/doc/fzf/examples/key-bindings.zsh ]] && source /usr/share/doc/fzf/examples/key-bindings.zsh
+      fi

@@ -1,0 +1,6 @@
+---
+- name: Reload sshd
+  ansible.builtin.service:
+    name: "{{ preflight_ssh_service | default(remote_dev.ssh_service | default('ssh')) }}"
+    state: reloaded
+  become: true

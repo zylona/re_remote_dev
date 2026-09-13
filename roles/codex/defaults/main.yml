@@ -1,0 +1,29 @@
+---
+codex_install_url: https://chatgpt.com/codex/install.sh
+codex_install_dir: "{{ ansible_facts.user_dir }}/.local/bin"
+codex_libexec_dir: "{{ ansible_facts.user_dir }}/.local/libexec"
+codex_real_binary: "{{ codex_libexec_dir }}/codex"
+codex_shim: "{{ codex_install_dir }}/codex"
+codex_home: "{{ ansible_facts.user_dir }}/.codex"
+codex_cache_dir: "{{ ansible_facts.user_dir }}/.cache/remote-dev/codex"
+codex_install_script: "{{ codex_cache_dir }}/install.sh"
+# Optional checksum for supply-chain pinning. Leave empty to follow the official
+# rolling installer while still downloading it before execution (never curl|sh).
+codex_install_sha256: ""
+codex_proxy_port: 4227
+codex_control_port: 4228
+codex_event_timeout_ms: 200
+codex_target_digest: "{{ inventory_hostname }}"
+codex_nonce_file: "{{ ansible_facts.user_dir }}/.config/remote-dev/session.nonce"
+codex_repair_academic_search: true
+codex_status_line:
+  - model-with-reasoning
+  - current-dir
+  - weekly-limit
+  - approval-mode
+  - five-hour-limit
+codex_terminal_title:
+  - activity
+  - project-name
+  - five-hour-limit
+  - weekly-limit

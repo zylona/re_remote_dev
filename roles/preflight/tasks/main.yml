@@ -1,0 +1,128 @@
+---
+- name: 校验 remote_dev 配置存在
+  ansible.builtin.assert:
+    that:
+      - remote_dev is mapping
+      - remote_dev.schema_version | int == 1
+      - remote_dev.target_user | length > 0
+    fail_msg: "remote_dev 配置不完整。"
+- name: 校验临时代理配置
+  ansible.builtin.assert:
+    that:
+      - remote_dev.proxy.mode in ['auto', 'required', 'off']
+      - remote_dev.proxy.host | length > 0
+      - remote_dev.proxy.port | int >= 1
+      - remote_dev.proxy.port | int <= 65535
+      - remote_dev.proxy.remote_port_range | length == 2
+      - remote_dev.proxy.remote_port_range[0] | int >= 1024
+      - remote_dev.proxy.remote_port_range[1] | int <= 65535
+    fail_msg: "remote_dev.proxy 必须包含合法的 mode、host、port 和远端端口范围。"
+- name: 识别目标包管理器
+  ansible.builtin.set_fact:
+    preflight_package_manager: "{{ ansible_facts.pkg_mgr | default('unsupported') }}"
+- name: 检查目标用户是否存在
+  ansible.builtin.getent:
+    database: passwd
+    key: "{{ remote_dev.target_user }}"
+  register: preflight_target_user_lookup
+  failed_when: false
+- name: 读取 sshd 转发策略（只读）
+  ansible.builtin.command:
+    argv: [sshd, -T]
+  environment:
+    PATH: "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+  register: preflight_sshd_config
+  changed_when: false
+  failed_when: false
+- name: 判断是否允许 SSH 双向 TCP forwarding
+  ansible.builtin.set_fact:
+    preflight_forwarding_allowed: >-
+      {{ preflight_sshd_config.rc == 0 and
+         (preflight_sshd_config.stdout is search('(?m)^allowtcpforwarding (yes|all)$')) }}
+- name: 读取 remote-dev forwarding drop-in（非 root 可读）
+  ansible.builtin.slurp:
+    src: /etc/ssh/sshd_config.d/99-remote-dev-forwarding.conf
+  register: preflight_forwarding_dropin_read
+  failed_when: false
+  changed_when: false
+- name: 合并 forwarding drop-in 探测结果
+  ansible.builtin.set_fact:
+    preflight_forwarding_allowed: >-
+      {{ (preflight_forwarding_allowed | bool) or
+         (preflight_forwarding_dropin_read.content | default('') | b64decode is search('(?m)^AllowTcpForwarding\s+(yes|all)$')) }}
+- name: 检查 sudo 是否可用（只读）
+  ansible.builtin.command:
+    argv: [sudo, -n, true]
+  register: preflight_sudo_check
+  changed_when: false
+  failed_when: false
+- name: 识别 SSH 服务名称
+  ansible.builtin.service_facts:
+- name: 设置 SSH 服务名称
+  ansible.builtin.set_fact:
+    preflight_ssh_service: >-
+      {{ remote_dev.ssh_service | default('sshd' if 'sshd.service' in (ansible_facts.services | default({})) else 'ssh') }}
+- name: 自动开启 SSH 双向 TCP forwarding
+  when:
+    - remote_dev.manage_sshd_forwarding | default(true) | bool
+    - remote_dev.proxy.mode != 'off'
+    - not (preflight_forwarding_allowed | bool)
+  become: "{{ (ansible_user_uid | default(1) | int) != 0 }}"
+  block:
+    - name: 创建 sshd drop-in 目录
+      ansible.builtin.file:
+        path: /etc/ssh/sshd_config.d
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+    - name: 创建 remote-dev SSH drop-in
+      ansible.builtin.copy:
+        dest: /etc/ssh/sshd_config.d/99-remote-dev-forwarding.conf
+        content: "# Managed by remote-dev\n# Required for proxy (-R 4227) and Codex OAuth callback (-L 1455).\nAllowTcpForwarding yes\n"
+        owner: root
+        group: root
+        mode: '0644'
+        backup: true
+      register: preflight_forwarding_dropin
+      notify: Reload sshd
+    - name: 校验 sshd 配置
+      ansible.builtin.command:
+        argv: [sshd, -t]
+      environment:
+        PATH: "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+      changed_when: false
+  rescue:
+    - name: 恢复原有 SSH drop-in 备份
+      ansible.builtin.copy:
+        src: "{{ preflight_forwarding_dropin.backup_file }}"
+        dest: /etc/ssh/sshd_config.d/99-remote-dev-forwarding.conf
+        remote_src: true
+        owner: root
+        group: root
+        mode: '0644'
+      when:
+        - preflight_forwarding_dropin is defined
+        - preflight_forwarding_dropin.backup_file is defined
+    - name: 回滚无效的 SSH drop-in
+      ansible.builtin.file:
+        path: /etc/ssh/sshd_config.d/99-remote-dev-forwarding.conf
+        state: absent
+      when: >-
+        preflight_forwarding_dropin is not defined or
+        preflight_forwarding_dropin.backup_file is not defined
+    - name: 报告 SSH forwarding 自动修复失败
+      ansible.builtin.fail:
+        msg: >-
+          无法自动开启 SSH 双向 TCP forwarding。请使用 sudo（必要时以
+          --ask-become-pass 交互输入密码）或 root 私钥重新执行。
+- name: 输出 P1 连接预检摘要
+  ansible.builtin.debug:
+    msg:
+      host: "{{ inventory_hostname }}"
+      distribution: "{{ ansible_distribution }}"
+      architecture: "{{ ansible_architecture }}"
+      package_manager: "{{ preflight_package_manager }}"
+      target_user_present: "{{ remote_dev.target_user in (ansible_facts.getent_passwd | default({})) }}"
+      proxy_mode: "{{ remote_dev.proxy.mode }}"
+      ssh_tcp_forwarding_allowed: "{{ preflight_forwarding_allowed | default(false) }}"

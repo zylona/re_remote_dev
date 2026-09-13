@@ -1,0 +1,28 @@
+---
+- name: 恢复并移除 remote-dev 用户配置
+  hosts: remote_dev_targets
+  gather_facts: true
+  tasks:
+    - name: 移除 remote-dev zsh 配置区块
+      ansible.builtin.blockinfile:
+        path: "{{ ansible_facts.user_dir }}/.zshrc"
+        marker: '# {mark} remote-dev'
+        state: absent
+      failed_when: false
+    - name: 恢复首次备份的 zshrc
+      ansible.builtin.copy:
+        src: "{{ ansible_facts.user_dir }}/.remote-dev-backup/.zshrc.original"
+        dest: "{{ ansible_facts.user_dir }}/.zshrc"
+        remote_src: true
+        mode: '0644'
+      when: ansible_facts.user_dir is defined
+      failed_when: false
+    - name: 删除 remote-dev 托管文件
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - "{{ ansible_facts.user_dir }}/.antidote"
+        - "{{ ansible_facts.user_dir }}/.zsh_plugins.txt"
+        - "{{ ansible_facts.user_dir }}/.zsh_plugins.zsh"
+        - "{{ ansible_facts.user_dir }}/.p10k.zsh"

@@ -1,0 +1,7 @@
+.local/
+inventory/production.yml
+inventory/qualification.yml
+*.retry
+__pycache__/
+.venv/
+dist/

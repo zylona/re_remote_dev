@@ -1,0 +1,351 @@
+---
+- name: 检查 Treesitter C 编译器
+  ansible.builtin.shell:
+    cmd: >-
+      set -o pipefail;
+      printf '#include <stdint.h>\n#include <stdio.h>\nint main(void){return 0;}\n' |
+      cc -x c -c -o /tmp/remote-dev-treesitter-probe.o - &&
+      rm -f /tmp/remote-dev-treesitter-probe.o
+  args:
+    executable: /bin/sh
+  register: nvim_cc_probe
+  changed_when: false
+  failed_when: false
+
+- name: 安装 Treesitter C 编译器（带超时和代理参数） # noqa command-instead-of-shell
+  ansible.builtin.shell:
+    cmd: >-
+      setsid timeout --signal=TERM --kill-after=15s 900s
+      sh -c
+      {% if ansible_facts.pkg_mgr == 'apt' %}
+      'DEBIAN_FRONTEND=noninteractive apt-get
+      -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30
+      -o DPkg::Lock::Timeout=60 install -y --no-install-recommends {{ nvim_compiler_package }}'
+      {% elif ansible_facts.pkg_mgr in ['dnf', 'yum'] %}
+      '{{ ansible_facts.pkg_mgr }} install -y gcc gcc-c++ make glibc-devel'
+      {% elif ansible_facts.pkg_mgr == 'apk' %}
+      'apk add --no-cache {{ nvim_compiler_package }}'
+      {% elif ansible_facts.pkg_mgr == 'pacman' %}
+      'pacman -Sy --noconfirm {{ nvim_compiler_package }}'
+      {% elif ansible_facts.pkg_mgr == 'zypper' %}
+      'zypper --non-interactive install --no-recommends {{ nvim_compiler_package }}'
+      {% else %}
+      'exit 42'
+      {% endif %}
+  become: true
+  become_user: root
+  when: nvim_cc_probe.rc != 0
+  environment:
+    http_proxy: "{{ remote_dev_temp_proxy_url | default(omit) }}"
+    https_proxy: "{{ remote_dev_temp_proxy_url | default(omit) }}"
+  register: nvim_compiler_install
+  changed_when: nvim_compiler_install.rc == 0
+  failed_when: false
+
+- name: 编译器安装失败时给出明确提示
+  ansible.builtin.fail:
+    msg: >-
+      Treesitter 编译器 {{ nvim_compiler_package }} 安装失败或超时（最长 900 秒）。
+      请检查本轮 SSH 代理、发行版软件源和包管理器锁；项目已主动回收安装进程，
+      可修复网络后重新执行 apply。
+  when: nvim_compiler_install is defined and (nvim_compiler_install.rc | default(0) | int) != 0
+
+- name: 验证 Treesitter C 编译器可用
+  ansible.builtin.shell:
+    cmd: >-
+      set -o pipefail;
+      printf '#include <stdint.h>\n#include <stdio.h>\nint main(void){return 0;}\n' |
+      cc -x c -c -o /tmp/remote-dev-treesitter-probe.o - &&
+      rm -f /tmp/remote-dev-treesitter-probe.o
+    executable: /bin/sh
+  register: nvim_cc_verify
+  changed_when: false
+  failed_when: nvim_cc_verify.rc != 0
+
+- name: 检查 Treesitter CLI
+  ansible.builtin.command: tree-sitter --version
+  register: nvim_ts_cli_probe
+  changed_when: false
+  failed_when: false
+
+- name: 安装 Treesitter CLI（带超时和代理参数） # noqa command-instead-of-shell
+  ansible.builtin.shell:
+    cmd: >-
+      setsid timeout --signal=TERM --kill-after=15s 900s
+      {% if ansible_facts.pkg_mgr == 'apt' %}
+      sh -c 'DEBIAN_FRONTEND=noninteractive apt-get -o Acquire::http::Timeout=30
+      -o Acquire::https::Timeout=30 -o DPkg::Lock::Timeout=60 install -y
+      --no-install-recommends {{ nvim_treesitter_cli_package }}'
+      {% elif ansible_facts.pkg_mgr in ['dnf', 'yum'] %}
+      {{ ansible_facts.pkg_mgr }} install -y {{ nvim_treesitter_cli_package }}
+      {% elif ansible_facts.pkg_mgr == 'apk' %}
+      apk add --no-cache {{ nvim_treesitter_cli_package }}
+      {% elif ansible_facts.pkg_mgr == 'pacman' %}
+      pacman -Sy --noconfirm {{ nvim_treesitter_cli_package }}
+      {% else %}
+      zypper --non-interactive install --no-recommends {{ nvim_treesitter_cli_package }}
+      {% endif %}
+  become: true
+  become_user: root
+  when: nvim_ts_cli_probe.rc != 0
+  environment:
+    http_proxy: "{{ remote_dev_temp_proxy_url | default(omit) }}"
+    https_proxy: "{{ remote_dev_temp_proxy_url | default(omit) }}"
+  register: nvim_ts_cli_install
+  changed_when: nvim_ts_cli_install.rc == 0
+  failed_when: false
+
+- name: 验证 Treesitter CLI 安装结果
+  ansible.builtin.command: tree-sitter --version
+  register: nvim_ts_cli_verify
+  changed_when: false
+  failed_when: false
+
+- name: Treesitter CLI 缺失时给出非阻断提示
+  ansible.builtin.debug:
+    msg: >-
+      当前发行版未提供可用的 tree-sitter CLI；Neovim/nvim-treesitter 仍可使用其内置解析器构建流程。
+      如需 CLI，请按发行版文档单独安装 tree-sitter-cli。
+  when: nvim_ts_cli_verify.rc != 0
+
+- name: 创建官方 Neovim 用户目录
+  ansible.builtin.file:
+    path: "{{ nvim_release_root }}"
+    state: directory
+    mode: '0755'
+
+- name: 检查官方 Neovim 用户安装
+  ansible.builtin.stat:
+    path: "{{ nvim_release_root }}/nvim-linux-{{ nvim_release_arch }}/bin/nvim"
+  register: nvim_release_stat
+
+- name: 下载官方 Neovim 统一 Linux 安装包
+  ansible.builtin.get_url:
+    url: "https://github.com/neovim/neovim/releases/download/v{{ nvim_release_version }}/nvim-linux-{{ nvim_release_arch }}.tar.gz"
+    dest: "{{ ansible_facts.user_dir }}/.cache/nvim-{{ nvim_release_version }}.tar.gz"
+    mode: '0644'
+  environment:
+    http_proxy: "{{ remote_dev_temp_proxy_url | default(omit) }}"
+    https_proxy: "{{ remote_dev_temp_proxy_url | default(omit) }}"
+  when: not nvim_release_stat.stat.exists and not (tools_offline | default(false) | bool)
+
+- name: 解压官方 Neovim 统一 Linux 安装包
+  ansible.builtin.unarchive:
+    src: "{{ ansible_facts.user_dir }}/.cache/nvim-{{ nvim_release_version }}.tar.gz"
+    dest: "{{ nvim_release_root }}"
+    remote_src: true
+    creates: "{{ nvim_release_root }}/nvim-linux-{{ nvim_release_arch }}/bin/nvim"
+  when: not nvim_release_stat.stat.exists and not (tools_offline | default(false) | bool)
+
+- name: 刷新官方 Neovim 安装状态
+  ansible.builtin.stat:
+    path: "{{ nvim_release_root }}/nvim-linux-{{ nvim_release_arch }}/bin/nvim"
+  register: nvim_release_ready
+
+- name: 链接官方 Neovim 到用户 PATH
+  ansible.builtin.file:
+    src: "{{ nvim_release_root }}/nvim-linux-{{ nvim_release_arch }}/bin/nvim"
+    dest: "{{ nvim_install_dir }}/nvim"
+    state: link
+    force: true
+  when: nvim_release_ready.stat.exists
+
+- name: 离线模式缺少官方 Neovim 安装时失败
+  ansible.builtin.assert:
+    that: nvim_release_ready.stat.exists
+    fail_msg: "离线模式缺少官方 Neovim {{ nvim_release_version }}，请先在线执行一次 P9 以预热缓存。"
+  when: tools_offline | default(false) | bool
+
+- name: 检查现有 Neovim 配置
+  ansible.builtin.stat:
+    path: "{{ nvim_config_dir }}"
+  register: nvim_config_stat
+
+- name: 检查受管配置标记
+  ansible.builtin.stat:
+    path: "{{ nvim_managed_marker }}"
+  register: nvim_managed_stat
+
+- name: 创建时间戳备份目录
+  ansible.builtin.file:
+    path: "{{ nvim_backup_root }}/{{ ansible_date_time.iso8601_basic_short }}"
+    state: directory
+    mode: '0700'
+  when: nvim_config_stat.stat.exists and not nvim_managed_stat.stat.exists and nvim_profile == 'omarchy-compatible'
+
+- name: 创建 Neovim 用户目录
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    mode: '0755'
+  loop:
+    - "{{ nvim_config_dir }}"
+    - "{{ nvim_data_dir }}"
+    - "{{ ansible_facts.user_dir }}/.local/state/nvim"
+    - "{{ ansible_facts.user_dir }}/.cache/nvim"
+
+- name: 备份现有 Neovim 配置
+  ansible.builtin.command:
+    argv:
+      - cp
+      - -a
+      - "{{ nvim_config_dir }}"
+      - "{{ nvim_backup_root }}/{{ ansible_date_time.iso8601_basic_short }}/nvim"
+    creates: "{{ nvim_backup_root }}/{{ ansible_date_time.iso8601_basic_short }}/nvim"
+  when: nvim_config_stat.stat.exists and not nvim_managed_stat.stat.exists and nvim_profile == 'omarchy-compatible'
+
+- name: 部署 Omarchy-compatible Neovim 配置快照
+  ansible.builtin.copy:
+    src: "config/{{ item }}"
+    dest: "{{ nvim_config_dir }}/{{ item }}"
+    mode: '0644'
+  loop:
+    - init.lua
+    - lazyvim.json
+    - lazy-lock.json
+    - lua/config/autocmds.lua
+    - lua/config/keymaps.lua
+    - lua/config/lazy.lua
+    - lua/config/options.lua
+    - lua/config/remote_clipboard.lua
+    - lua/plugins/all-themes.lua
+    - lua/plugins/disable-news-alert.lua
+    - lua/plugins/omarchy-theme-hotreload.lua
+    - lua/plugins/snacks-animated-scrolling-off.lua
+    - lua/plugins/theme.lua
+    - plugin/after/transparency.lua
+  when: nvim_profile == 'omarchy-compatible'
+
+- name: 标记受管 Neovim 配置
+  ansible.builtin.file:
+    path: "{{ nvim_managed_marker }}"
+    state: touch
+    access_time: preserve
+    modification_time: preserve
+    mode: '0644'
+  when: nvim_profile == 'omarchy-compatible'
+
+- name: 检测字体目录
+  ansible.builtin.stat:
+    path: "{{ nvim_font_dir }}"
+  register: nvim_font_stat
+
+- name: 创建用户字体目录
+  ansible.builtin.file:
+    path: "{{ nvim_font_dir }}"
+    state: directory
+    mode: '0755'
+  when: nvim_install_font and not nvim_font_stat.stat.exists
+
+- name: 下载 JetBrainsMono Nerd Font
+  ansible.builtin.get_url:
+    url: "{{ nvim_font_url }}"
+    dest: "{{ ansible_facts.user_dir }}/.cache/JetBrainsMono.zip"
+    mode: '0644'
+  environment:
+    http_proxy: "{{ remote_dev_temp_proxy_url | default(omit) }}"
+    https_proxy: "{{ remote_dev_temp_proxy_url | default(omit) }}"
+  when: nvim_install_font and not nvim_font_stat.stat.exists and not (tools_offline | default(false) | bool)
+
+- name: 解压 JetBrainsMono Nerd Font
+  ansible.builtin.unarchive:
+    src: "{{ ansible_facts.user_dir }}/.cache/JetBrainsMono.zip"
+    dest: "{{ nvim_font_dir }}"
+    remote_src: true
+    creates: "{{ nvim_font_dir }}/JetBrainsMonoNerdFont-Regular.ttf"
+  when: nvim_install_font and not nvim_font_stat.stat.exists and not (tools_offline | default(false) | bool)
+
+- name: 检查 Neovim 配置语法
+  ansible.builtin.command:
+    argv: [timeout, 180, nvim, --headless, -u, "{{ nvim_config_dir }}/init.lua", "+qa!"]
+  register: nvim_config_check
+  changed_when: false
+  failed_when: nvim_config_check.rc != 0
+  environment:
+    HOME: "{{ ansible_facts.user_dir }}"
+    XDG_CONFIG_HOME: "{{ ansible_facts.user_dir }}/.config"
+    http_proxy: "{{ remote_dev_temp_proxy_url | default(omit) }}"
+    https_proxy: "{{ remote_dev_temp_proxy_url | default(omit) }}"
+    PATH: "{{ nvim_install_dir }}:/usr/local/bin:/usr/bin:/bin"
+
+- name: 按锁文件同步 LazyVim 插件
+  ansible.builtin.stat:
+    path: "{{ nvim_data_dir }}/lazy/lazy.nvim"
+  register: nvim_lazy_stat
+
+- name: 首次安装时按锁文件同步 LazyVim 插件
+  ansible.builtin.command:
+    argv: [timeout, 300, nvim, --headless, "+Lazy! sync", "+qa!"]
+  register: nvim_plugin_sync
+  changed_when: false
+  failed_when: nvim_plugin_sync.rc != 0
+  environment:
+    HOME: "{{ ansible_facts.user_dir }}"
+    XDG_CONFIG_HOME: "{{ ansible_facts.user_dir }}/.config"
+    http_proxy: "{{ remote_dev_temp_proxy_url | default(omit) }}"
+    https_proxy: "{{ remote_dev_temp_proxy_url | default(omit) }}"
+    PATH: "{{ nvim_install_dir }}:/usr/local/bin:/usr/bin:/bin"
+  when:
+    - nvim_sync_plugins
+    - not nvim_lazy_stat.stat.exists
+    - not (tools_offline | default(false) | bool)
+
+- name: 预安装 LazyVim 默认 Treesitter parsers
+  ansible.builtin.command:
+    argv:
+      - timeout
+      - "900"
+      - nvim
+      - --headless
+      - -u
+      - "{{ nvim_config_dir }}/init.lua"
+      - >-
+        +lua local ts=require('nvim-treesitter'); local langs={{ nvim_treesitter_languages | to_json }};
+        local function parser_count() return #vim.fn.glob(vim.fn.stdpath('data') .. '/site/parser/*.so', true, true) end;
+        ts.install(langs); vim.wait(840000, function()
+        return parser_count() >= {{ nvim_treesitter_languages | length }} end, 1000)
+      - +qa!
+  register: nvim_treesitter_install
+  changed_when: false
+  failed_when: nvim_treesitter_install.rc != 0
+  environment:
+    HOME: "{{ ansible_facts.user_dir }}"
+    XDG_CONFIG_HOME: "{{ ansible_facts.user_dir }}/.config"
+    http_proxy: "{{ remote_dev_temp_proxy_url | default(omit) }}"
+    https_proxy: "{{ remote_dev_temp_proxy_url | default(omit) }}"
+    PATH: "{{ nvim_install_dir }}:/usr/local/bin:/usr/bin:/bin"
+  when:
+    - nvim_install_treesitter_parsers
+    - nvim_sync_plugins
+    - not (tools_offline | default(false) | bool)
+
+- name: 验证 Treesitter parsers 已完成预安装
+  ansible.builtin.command:
+    argv:
+      - sh
+      - -c
+      - >-
+        count=$(find "{{ nvim_data_dir }}/site/parser" -maxdepth 1 -type f -name '*.so' 2>/dev/null | wc -l);
+        test "$count" -ge "{{ nvim_treesitter_languages | length }}"
+  register: nvim_treesitter_verify
+  changed_when: false
+  failed_when: false
+  environment:
+    HOME: "{{ ansible_facts.user_dir }}"
+    XDG_CONFIG_HOME: "{{ ansible_facts.user_dir }}/.config"
+    http_proxy: "{{ remote_dev_temp_proxy_url | default(omit) }}"
+    https_proxy: "{{ remote_dev_temp_proxy_url | default(omit) }}"
+    PATH: "{{ nvim_install_dir }}:/usr/local/bin:/usr/bin:/bin"
+  when:
+    - nvim_install_treesitter_parsers
+    - nvim_sync_plugins
+    - not (tools_offline | default(false) | bool)
+
+- name: Treesitter parsers 未全部完成时给出非阻断提示
+  ansible.builtin.debug:
+    msg: >-
+      Treesitter 解析器尚未全部预安装（当前目录中的 parser 数量不足目标值）。
+      Neovim 已完成配置，可在网络可用时通过 :TSUpdate 或重新执行 bootstrap 补齐。
+  when:
+    - nvim_treesitter_verify is defined
+    - nvim_treesitter_verify.rc | default(0) | int != 0
