@@ -29,5 +29,5 @@ chmod 0755 "$stage_dir/$pkg/bin/remote-dev-orchestrator-server" "$stage_dir/$pkg
 tar_args=(--sort=name --owner=0 --group=0 --numeric-owner -czf "$dist_dir/$pkg.tar.gz" -C "$stage_dir" "$pkg")
 if [[ -n "${SOURCE_DATE_EPOCH:-}" ]]; then tar_args+=(--mtime="@$SOURCE_DATE_EPOCH"); fi
 tar "${tar_args[@]}"
-sha256sum "$dist_dir/$pkg.tar.gz" > "$dist_dir/$pkg.tar.gz.sha256"
+(cd "$dist_dir" && sha256sum "$pkg.tar.gz" > "$pkg.tar.gz.sha256")
 echo "$dist_dir/$pkg.tar.gz"
