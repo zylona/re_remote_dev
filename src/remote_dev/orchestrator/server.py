@@ -15,7 +15,7 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
-from .model import MasterState, OAuthState, TargetKey, TargetStatus
+from .model import ForwardState, ForwardStatus, MasterState, OAuthState, TargetKey, TargetStatus
 from .protocol import ProtocolError, decode_event
 from .oauth import OAuthError, OAuthManager
 
@@ -28,6 +28,7 @@ class OrchestratorServer:
         self.listeners = [listener, *(extra_listeners or [])]
         self.path = path
         self.targets: dict[str, TargetStatus] = {}
+        self._identity_files: dict[str, Path] = {}
         # A TUI redraw may yield the same authorize URL through both the
         # normal and wrapped-url matchers.  Deduplicate browser launches per
         # OAuth session, not merely by URL text.
@@ -41,7 +42,29 @@ class OrchestratorServer:
         data["master"] = status.master.value
         data["oauth"] = status.oauth.value
         data["digest"] = status.target.digest
+        for key in ("proxy_forward", "event_forward", "oauth_forward"):
+            forward = data[key]
+            forward["state"] = forward["state"].value
         return data
+
+    @staticmethod
+    def _forward_status(value: Any, kind: str, previous: ForwardStatus | None = None) -> ForwardStatus:
+        """Parse secret-free forwarder telemetry from a session heartbeat."""
+        if not isinstance(value, dict):
+            return previous or ForwardStatus(kind)
+        try:
+            state = ForwardState(str(value.get("state", "ABSENT")))
+        except ValueError:
+            state = ForwardState.DEGRADED
+        return ForwardStatus(
+            kind=kind,
+            state=state,
+            pid=int(value["pid"]) if value.get("pid") is not None else None,
+            local_port=int(value["local_port"]) if value.get("local_port") is not None else None,
+            remote_port=int(value["remote_port"]) if value.get("remote_port") is not None else None,
+            last_error=str(value["last_error"]) if value.get("last_error") else None,
+            last_success=float(value["last_success"]) if value.get("last_success") is not None else None,
+        )
 
     def handle(self, payload: dict[str, Any]) -> dict[str, Any]:
         if "event" in payload:
@@ -69,6 +92,9 @@ class OrchestratorServer:
                 return {"ok": False, "error": f"target 无效：{exc}"}
             if op == "register":
                 previous = self.targets.get(target.digest)
+                identity_file = payload.get("identity_file")
+                if isinstance(identity_file, str) and identity_file:
+                    self._identity_files[target.digest] = Path(identity_file).expanduser()
                 self.targets[target.digest] = TargetStatus(
                     target=target,
                     master=(previous.master if previous else (MasterState.READY if payload.get("control_path") else MasterState.ABSENT)),
@@ -76,9 +102,13 @@ class OrchestratorServer:
                     control_path=payload.get("control_path") or (previous.control_path if previous else None),
                     proxy_available=bool(payload.get("proxy_available", previous.proxy_available if previous else False)),
                     session_count=previous.session_count if previous else 0,
+                    proxy_forward=self._forward_status(payload.get("proxy_forward"), "proxy", previous.proxy_forward if previous else None),
+                    event_forward=self._forward_status(payload.get("event_forward"), "event", previous.event_forward if previous else None),
+                    oauth_forward=previous.oauth_forward if previous else ForwardStatus("oauth"),
                 )
             else:
                 self.targets.pop(target.digest, None)
+                self._identity_files.pop(target.digest, None)
             return {"ok": True, "digest": target.digest}
         return {"ok": False, "error": f"不支持的操作：{op}"}
 
@@ -94,16 +124,31 @@ class OrchestratorServer:
         if event.event == "CODEX_START":
             self._oauth_browser_opened.discard(event.target)
             oauth_state = OAuthState.PENDING if status.control_path else OAuthState.FAILED
+            oauth_forward = status.oauth_forward
             try:
                 if status.control_path:
-                    self.oauth.start(status.target, control_path=status.control_path)
-            except OAuthError:
+                    oauth_kwargs = {"control_path": status.control_path}
+                    if event.target in self._identity_files:
+                        oauth_kwargs["identity_file"] = self._identity_files[event.target]
+                    oauth_session = self.oauth.start(status.target, **oauth_kwargs)
+                    if oauth_session is not None:
+                        primary = oauth_session.forward
+                        oauth_forward = ForwardStatus(
+                            "oauth", ForwardState.READY,
+                            primary.process.pid if primary else None,
+                            oauth_session.local_port, oauth_session.remote_port,
+                        )
+            except OAuthError as exc:
                 oauth_state = OAuthState.FAILED
+                oauth_forward = ForwardStatus("oauth", ForwardState.FAILED, last_error=str(exc))
             self.targets[event.target] = TargetStatus(
                 target=status.target, master=MasterState.CODEX_RUNNING,
                 oauth=oauth_state, control_path=status.control_path,
                 proxy_available=status.proxy_available,
                 session_count=status.session_count + 1,
+                proxy_forward=status.proxy_forward,
+                event_forward=status.event_forward,
+                oauth_forward=oauth_forward,
             )
         elif event.event == "CODEX_OAUTH_URL":
             if event.oauth_url and event.target not in self._oauth_browser_opened:
@@ -113,6 +158,9 @@ class OrchestratorServer:
                 target=status.target, master=MasterState.OAUTH_PENDING,
                 oauth=OAuthState.PENDING, control_path=status.control_path,
                 proxy_available=status.proxy_available, session_count=status.session_count,
+                proxy_forward=status.proxy_forward,
+                event_forward=status.event_forward,
+                oauth_forward=status.oauth_forward,
             )
         elif event.event == "CODEX_EXIT":
             self._oauth_browser_opened.discard(event.target)
@@ -126,6 +174,9 @@ class OrchestratorServer:
                 oauth=OAuthState.NONE, control_path=status.control_path,
                 proxy_available=status.proxy_available,
                 session_count=max(0, status.session_count - 1),
+                proxy_forward=status.proxy_forward,
+                event_forward=status.event_forward,
+                oauth_forward=ForwardStatus("oauth") if status.session_count <= 1 else status.oauth_forward,
             )
         return {"ok": True, "event": event.event}
 
@@ -153,7 +204,14 @@ class OrchestratorServer:
                     conn.settimeout(2.0)
                     data = bytearray()
                     while not data.endswith(b"\n"):
-                        chunk = conn.recv(4096)
+                        try:
+                            chunk = conn.recv(4096)
+                        except socket.timeout:
+                            # A half-open probe must not terminate the shared
+                            # user service.  Drop only this connection and
+                            # keep the orchestrator (and SSH masters) alive.
+                            data.clear()
+                            break
                         if not chunk:
                             break
                         data.extend(chunk)

@@ -2,54 +2,47 @@ from pathlib import Path
 
 import pytest
 
-from remote_dev.orchestrator.master import MasterManager
 from remote_dev.orchestrator.model import TargetKey
 from remote_dev.orchestrator.oauth import OAuthError, OAuthManager
 
 
-def test_oauth_start_is_single_active_and_idempotent(monkeypatch, tmp_path: Path):
+class LiveProcess:
+    _pid = 100
+    def __init__(self):
+        LiveProcess._pid += 1
+        self.pid = LiveProcess._pid
+    def wait(self, timeout=None):
+        raise __import__("subprocess").TimeoutExpired("ssh", timeout)
+    def poll(self): return None
+    def send_signal(self, signal): pass
+    def kill(self): pass
+
+
+def test_oauth_uses_standalone_forwarders_and_is_single_active(monkeypatch, tmp_path: Path):
     calls = []
-
-    class Result:
-        returncode = 0
-        stderr = ""
-        stdout = ""
-
-    monkeypatch.setattr("remote_dev.orchestrator.oauth.subprocess.run", lambda args, **kwargs: calls.append(args) or Result())
-    manager = OAuthManager(MasterManager(home=tmp_path))
+    monkeypatch.setattr("remote_dev.orchestrator.oauth.subprocess.Popen", lambda args, **kwargs: calls.append(args) or LiveProcess())
+    manager = OAuthManager()
     first = TargetKey("one", 22, "u")
     second = TargetKey("two", 22, "u")
-    assert manager.start(first) == manager.start(first)
+    assert manager.start(first, identity_file=tmp_path / "key") == manager.start(first, identity_file=tmp_path / "key")
     with pytest.raises(OAuthError, match="已有另一个目标"):
-        manager.start(second)
-    assert calls[0][calls[0].index("-O") + 1] == "forward"
-    assert "127.0.0.1:1455:127.0.0.1:1455" in calls[0]
+        manager.start(second, identity_file=tmp_path / "key")
+    assert len(calls) == 2
+    assert all("-O" not in call for call in calls)
+    assert any("127.0.0.1:1455:127.0.0.1:1455" in call for call in calls)
 
 
-def test_oauth_finish_cleans_forward_and_is_idempotent(monkeypatch, tmp_path: Path):
-    calls = []
-
-    class Result:
-        returncode = 0
-        stderr = ""
-        stdout = ""
-
-    monkeypatch.setattr("remote_dev.orchestrator.oauth.subprocess.run", lambda args, **kwargs: calls.append(args) or Result())
-    manager = OAuthManager(MasterManager(home=tmp_path))
+def test_oauth_finish_stops_forwarders_and_is_idempotent(monkeypatch, tmp_path: Path):
+    processes = []
+    monkeypatch.setattr("remote_dev.orchestrator.oauth.subprocess.Popen", lambda *args, **kwargs: processes.append(LiveProcess()) or processes[-1])
+    manager = OAuthManager()
     target = TargetKey("host", 22, "u")
-    manager.start(target)
+    manager.start(target, identity_file=tmp_path / "key")
     assert manager.finish(target) is True
     assert manager.finish(target) is False
-    assert calls[1][calls[1].index("-O") + 1] == "cancel"
 
 
-def test_oauth_forward_failure_is_actionable(monkeypatch, tmp_path: Path):
-    class Result:
-        returncode = 255
-        stderr = "Control socket unavailable"
-        stdout = ""
-
-    monkeypatch.setattr("remote_dev.orchestrator.oauth.subprocess.run", lambda *args, **kwargs: Result())
-    with pytest.raises(OAuthError, match="无法建立") as exc:
-        OAuthManager(MasterManager(home=tmp_path)).start(TargetKey("host", 22, "u"))
-    assert exc.value.code == "PORT_CONFLICT"
+def test_oauth_requires_identity_file():
+    with pytest.raises(OAuthError) as exc:
+        OAuthManager().start(TargetKey("host", 22, "u"))
+    assert exc.value.code == "MASTER_UNAVAILABLE"

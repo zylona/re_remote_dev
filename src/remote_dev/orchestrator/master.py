@@ -42,7 +42,7 @@ class MasterManager:
     def forwarding_probe_command(self, target: TargetKey) -> list[str]:
         script = (
             "import socket,sys; "
-            f"ports=({self.proxy_port},{self.control_port}); "
+            f"ports=({self.control_port},); "
             "sys.exit(0 if all(socket.socket().connect_ex(('127.0.0.1', p)) == 0 for p in ports) else 1)"
         )
         return [
@@ -54,7 +54,6 @@ class MasterManager:
         return [
             "ssh", "-F", "/dev/null", "-S", str(self.control_path(target)),
             "-O", "forward",
-            "-R", f"127.0.0.1:{self.proxy_port}:127.0.0.1:{self.proxy_port}",
             "-R", f"127.0.0.1:{self.control_port}:127.0.0.1:{self.local_control_port}",
             self.destination(target),
         ]

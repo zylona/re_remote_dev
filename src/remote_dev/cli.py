@@ -266,6 +266,11 @@ def setup() -> None:
     target_password = typer.prompt("目标用户密码（可留空，使用 SSH 公钥）", default="", hide_input=True, confirmation_prompt=False)
     become_method = "su" if login_user == "root" else _detect_become_for_setup(destination=f"{login_user}@{host}", identity_file=key, auth_password=password)
     destination = f"{login_user}@{host}"
+    # The remote Codex shim must use the same stable target digest as the
+    # local orchestrator.  The temporary inventory name (``interactive``)
+    # is not an identity and caused OAuth events to be discarded.
+    from .orchestrator.model import TargetKey
+    target_digest = TargetKey(host, 22, target_user).digest
     run_dir = Path(".local/runs") / RUN_ID
     run_dir.mkdir(parents=True, exist_ok=True)
     inventory = run_dir / "interactive.yml"
@@ -298,7 +303,11 @@ def setup() -> None:
         from .proxy import ProxySettings, ReverseProxyTunnel
         settings = ProxySettings()
         with ReverseProxyTunnel(settings=settings, destination=destination, identity_file=key, auth_password=password) as tunnel:
-            extra = {"ansible_become_method": become_method, "ansible_ssh_common_args": "-F/dev/null"}
+            extra = {
+                "ansible_become_method": become_method,
+                "ansible_ssh_common_args": "-F/dev/null",
+                "codex_target_digest": target_digest,
+            }
             if tunnel.process:
                 extra["remote_dev_temp_proxy_url"] = tunnel.proxy_url
             if become_method == "sudo":

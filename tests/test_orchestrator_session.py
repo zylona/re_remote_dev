@@ -18,7 +18,12 @@ def test_session_start_writes_nonce_and_registers(monkeypatch, tmp_path: Path):
     monkeypatch.setattr("remote_dev.orchestrator.session.request", lambda payload: {"ok": True, "digest": "d"})
     monkeypatch.setattr(manager_check := MasterManager(home=tmp_path), "check", lambda target: False)
     monkeypatch.setattr(manager_check, "ensure_forwarding", lambda target: True)
-    manager = SessionManager(manager_check)
+    class Proxy:
+        def start(self, target, identity):
+            return None
+    class Event(Proxy):
+        pass
+    manager = SessionManager(manager_check, Proxy(), Event())
     session = manager.start(TargetKey("host", 22, "u"), Path("~/.ssh/id_ed25519"))
     assert len(session.nonce) > 20
     assert any("session.nonce" in part for command in commands for part in command)
@@ -39,7 +44,10 @@ def test_session_registers_verified_proxy(monkeypatch, tmp_path: Path):
     monkeypatch.setattr("remote_dev.orchestrator.session.subprocess.run", lambda *args, **kwargs: Result())
     monkeypatch.setattr("remote_dev.orchestrator.session.request", lambda payload: payloads.append(payload) or {"ok": True})
 
-    SessionManager(manager).start(TargetKey("host", 22, "u"), tmp_path / "key")
+    class Proxy:
+        def start(self, target, identity):
+            return None
+    SessionManager(manager, Proxy(), Proxy()).start(TargetKey("host", 22, "u"), tmp_path / "key")
 
     assert payloads[-1]["proxy_available"] is True
 

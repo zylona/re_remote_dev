@@ -41,7 +41,7 @@
          (preflight_sshd_config.stdout is search('(?m)^allowtcpforwarding (yes|all)$')) }}
 - name: 读取 remote-dev forwarding drop-in（非 root 可读）
   ansible.builtin.slurp:
-    src: /etc/ssh/sshd_config.d/99-remote-dev-forwarding.conf
+    src: /etc/ssh/sshd_config.d/00-remote-dev-forwarding.conf
   register: preflight_forwarding_dropin_read
   failed_when: false
   changed_when: false
@@ -78,13 +78,18 @@
         mode: '0755'
     - name: 创建 remote-dev SSH drop-in
       ansible.builtin.copy:
-        dest: /etc/ssh/sshd_config.d/99-remote-dev-forwarding.conf
+        dest: /etc/ssh/sshd_config.d/00-remote-dev-forwarding.conf
         content: "# Managed by remote-dev\n# Required for proxy (-R 4227) and Codex OAuth callback (-L 1455).\nAllowTcpForwarding yes\n"
         owner: root
         group: root
         mode: '0644'
         backup: true
       register: preflight_forwarding_dropin
+      notify: Reload sshd
+    - name: 清理旧版 remote-dev SSH drop-in
+      ansible.builtin.file:
+        path: /etc/ssh/sshd_config.d/99-remote-dev-forwarding.conf
+        state: absent
       notify: Reload sshd
     - name: 校验 sshd 配置
       ansible.builtin.command:
@@ -96,7 +101,7 @@
     - name: 恢复原有 SSH drop-in 备份
       ansible.builtin.copy:
         src: "{{ preflight_forwarding_dropin.backup_file }}"
-        dest: /etc/ssh/sshd_config.d/99-remote-dev-forwarding.conf
+        dest: /etc/ssh/sshd_config.d/00-remote-dev-forwarding.conf
         remote_src: true
         owner: root
         group: root
@@ -106,7 +111,7 @@
         - preflight_forwarding_dropin.backup_file is defined
     - name: 回滚无效的 SSH drop-in
       ansible.builtin.file:
-        path: /etc/ssh/sshd_config.d/99-remote-dev-forwarding.conf
+        path: /etc/ssh/sshd_config.d/00-remote-dev-forwarding.conf
         state: absent
       when: >-
         preflight_forwarding_dropin is not defined or

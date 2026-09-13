@@ -14,7 +14,7 @@
 - **单台设备向导**：交互输入地址、用户、密钥或 SSH 密码，自动探测发行版和提权方式。
 - **跨发行版基础恢复**：识别 apt、dnf/yum、apk、pacman、zypper；目标机无需预装 Python。
 - **本机习惯**：静态 Antidote bundle、Lean 风格 p10k、mise、fzf/zoxide、LazyVim + Omarchy 风格配置。
-- **多窗口复用**：Zellij 默认，tmux fallback；本地 ControlMaster 复用 SSH 传输和端口转发。
+- **多窗口稳定性**：Zellij 默认，tmux fallback；持久 ControlMaster 专用于代理/事件转发，普通 SSH 窗口使用独立连接，避免 Codex 流量拖慢终端输入。
 - **受控代理**：把控制端 `127.0.0.1:4227` 临时转发到目标机 loopback，失败和退出自动清理。
 - **可验证、可重跑**：固定 Play 顺序、独立只读 verify、第二次 apply 幂等检查。
 - **可发布制品**：本地编排器可作为 GitHub Release tarball 独立安装和升级。

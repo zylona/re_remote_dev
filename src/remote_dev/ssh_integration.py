@@ -33,9 +33,11 @@ def _target_block(host: str, control_path: Path, identity_file: Path, *, proxy_p
     return "\n".join([
         f"# >>> remote-dev target {host} >>>",
         f"Host {host}",
-        "  ControlMaster auto",
-        "  ControlPersist 600",
-        f"  ControlPath {control_path}",
+        # Keep user shells on independent TCP connections.  The persistent
+        # master carries proxy/Codex traffic; sharing it causes head-of-line
+        # blocking and makes every interactive window lag under load.
+        "  ControlMaster no",
+        "  ControlPath none",
         f"  IdentityFile {identity_file.expanduser()}",
         "  ExitOnForwardFailure yes",
         "  ServerAliveInterval 30",

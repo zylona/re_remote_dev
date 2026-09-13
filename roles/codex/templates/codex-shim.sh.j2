@@ -6,7 +6,14 @@ event_sender={{ codex_libexec_dir | quote }}/remote-dev-codex-event.py
 pty_runner={{ codex_libexec_dir | quote }}/remote-dev-codex-pty.py
 target={{ codex_target_digest | default('unknown') | quote }}
 nonce_file={{ codex_nonce_file | default(ansible_facts.user_dir ~ '/.config/remote-dev/session.nonce') | quote }}
+auth_file={{ codex_home | quote }}/auth.json
 nonce=$(cat "$nonce_file" 2>/dev/null || true)
+# Once Codex is authenticated, keep its terminal path completely native.
+# The PTY wrapper exists only to discover the first OAuth URL; wrapping every
+# normal session adds avoidable latency and can interfere with terminal state.
+if [ -s "$auth_file" ] && [ "${1-}" != "login" ]; then
+  exec "$real" "$@"
+fi
 if [ -n "$nonce" ] && [ -x "$event_sender" ]; then
   python3 "$event_sender" CODEX_START "$target" "$nonce" "$$" >/dev/null 2>&1 || true
 fi

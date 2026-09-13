@@ -12,6 +12,7 @@ from pathlib import Path
 from .client import request
 from .master import MasterManager
 from .model import TargetKey
+from .forwarder import EventForwarder, ForwardProcess, ProxyForwarder
 
 
 @dataclass(frozen=True, slots=True)
@@ -20,13 +21,17 @@ class ManagedSession:
     control_path: Path
     nonce: str
     identity_file: Path | None = None
+    proxy_forward: ForwardProcess | None = None
+    event_forward: ForwardProcess | None = None
 
 
 class SessionManager:
     """Create one target-isolated ControlMaster and publish its session nonce."""
 
-    def __init__(self, master: MasterManager | None = None) -> None:
+    def __init__(self, master: MasterManager | None = None, proxy: ProxyForwarder | None = None, event: EventForwarder | None = None) -> None:
         self.master = master or MasterManager()
+        self.proxy = proxy or ProxyForwarder()
+        self.event = event or EventForwarder()
 
     def _remote_nonce(self, target: TargetKey) -> str:
         # The file is deliberately fixed per target user; the value is rotated
@@ -55,22 +60,45 @@ class SessionManager:
             if result.returncode:
                 raise RuntimeError(f"无法建立 SSH ControlMaster：{(result.stderr or result.stdout).strip()}")
             session = ManagedSession(target, path, secrets.token_urlsafe(32), identity_file)
-        if not self.master.ensure_forwarding(target):
+        try:
+            proxy_forward = self.proxy.start(target, identity_file)
+        except (OSError, RuntimeError, subprocess.SubprocessError):
             subprocess.run(
                 self.master.stop_command(target), check=False,
                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10,
             )
-            raise RuntimeError("SSH ControlMaster 已建立，但远端 4227/4228 转发不可用")
-        self._write_nonce(session)
-        response = request({
-            "op": "register",
-            "target": {
-                "hostname": target.hostname, "port": target.port,
-                "user": target.user, "identity_fingerprint": target.identity_fingerprint,
-            },
-            "control_path": str(path),
-            "proxy_available": True,
-        })
+            raise RuntimeError("独立 SSH 代理 forwarder 启动失败")
+        try:
+            event_forward = self.event.start(target, identity_file)
+        except (OSError, RuntimeError, subprocess.SubprocessError):
+            ProxyForwarder.stop(proxy_forward)
+            subprocess.run(self.master.stop_command(target), check=False,
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10)
+            raise RuntimeError("独立 SSH 事件 forwarder 启动失败")
+        session = ManagedSession(session.target, session.control_path, session.nonce,
+                                 session.identity_file, proxy_forward, event_forward)
+        try:
+            self._write_nonce(session)
+            response = request({
+                "op": "register",
+                "target": {
+                    "hostname": target.hostname, "port": target.port,
+                    "user": target.user, "identity_fingerprint": target.identity_fingerprint,
+                },
+                "control_path": str(path),
+                "identity_file": str(identity_file.expanduser()),
+                "proxy_available": True,
+                "proxy_forward": self._forward_payload(proxy_forward),
+                "event_forward": self._forward_payload(event_forward),
+            })
+        except Exception:
+            # A nonce or broker failure must not leak long-lived forwarding
+            # processes (or leave a master registered as healthy).
+            ProxyForwarder.stop(event_forward)
+            ProxyForwarder.stop(proxy_forward)
+            subprocess.run(self.master.stop_command(target), check=False,
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10)
+            raise
         if not response.get("ok"):
             self.stop(session, unregister=False)
             raise RuntimeError(f"编排器注册目标失败：{response.get('error', 'unknown')}")
@@ -101,6 +129,22 @@ class SessionManager:
                 subprocess.run(self.master.stop_command(session.target), check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10)
             except (OSError, subprocess.SubprocessError):
                 pass
+            if session.event_forward is not None:
+                ProxyForwarder.stop(session.event_forward)
+            if session.proxy_forward is not None:
+                ProxyForwarder.stop(session.proxy_forward)
+
+    @staticmethod
+    def _forward_payload(forward: ForwardProcess | None) -> dict[str, object] | None:
+        if forward is None:
+            return None
+        return {
+            "kind": forward.kind,
+            "state": "READY",
+            "pid": forward.process.pid,
+            "local_port": forward.local_port,
+            "remote_port": forward.remote_port,
+        }
 
     def serve(self, session: ManagedSession) -> None:
         """Supervise a master without turning transient probes into restarts.
@@ -119,42 +163,51 @@ class SessionManager:
             previous[sig] = signal.signal(sig, shutdown)
         consecutive_failures = 0
         backoff = 5.0
-        next_forward_probe = 0.0
         next_heartbeat = 0.0
-        forwarding_ok = True
         try:
             while not interrupted:
                 now = time.monotonic()
-                master_ok = False
+                master_ok: bool | None = False
                 try:
                     master_ok = self.master.check(session.target, timeout=2.0)
+                except subprocess.TimeoutExpired:
+                    # A busy multiplexed connection can delay the control
+                    # reply while Codex is streaming TUI output.  Timeout is
+                    # inconclusive and must never tear down user channels.
+                    master_ok = None
                 except (OSError, subprocess.SubprocessError):
                     master_ok = False
-                if master_ok and now >= next_forward_probe:
-                    try:
-                        forwarding_ok = self.master.forwarding_ready(session.target, timeout=2.0)
-                    except (OSError, subprocess.SubprocessError):
-                        forwarding_ok = False
-                    next_forward_probe = now + (30.0 if forwarding_ok else 5.0)
-                healthy = master_ok and forwarding_ok
+                # P3 deliberately keeps forwarding outside the ControlMaster.
+                # Process liveness is the only local probe; never send ``-O
+                # forward`` probes over the interactive/master transport.
+                forwarding_ok = all(
+                    forward is not None and forward.process.poll() is None
+                    for forward in (session.proxy_forward, session.event_forward)
+                )
                 if now >= next_heartbeat:
                     try:
                         request({
                             "op": "register",
                             "target": {"hostname": session.target.hostname, "port": session.target.port, "user": session.target.user, "identity_fingerprint": session.target.identity_fingerprint},
                             "control_path": str(session.control_path),
+                            "identity_file": str(session.identity_file.expanduser()) if session.identity_file else None,
                             "proxy_available": forwarding_ok,
+                            "proxy_forward": self._forward_payload(session.proxy_forward) if session.proxy_forward else None,
+                            "event_forward": self._forward_payload(session.event_forward) if session.event_forward else None,
                         }, timeout=2.0)
                     except (OSError, TimeoutError, ValueError):
                         # The broker is socket-activated and may restart; a
                         # later heartbeat will re-register this live session.
                         pass
                     next_heartbeat = now + 20.0
-                if healthy:
+                forward_failure = not forwarding_ok
+                if master_ok is True and not forward_failure:
                     consecutive_failures = 0
                     backoff = 5.0
-                else:
+                elif master_ok is False or forward_failure:
                     consecutive_failures += 1
+                # ``None`` means the control probe timed out.  Keep both the
+                # current failure count and the live master untouched.
                 if consecutive_failures >= 3:
                     # Keep the service alive while recovering.  This avoids a
                     # systemd restart storm and preserves the target status.
@@ -162,16 +215,16 @@ class SessionManager:
                         time.sleep(min(backoff, 300.0))
                     else:
                         try:
+                            ProxyForwarder.stop(session.event_forward)
+                            ProxyForwarder.stop(session.proxy_forward)
                             subprocess.run(self.master.stop_command(session.target), check=False,
                                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5)
                             session = self.start(session.target, session.identity_file)
-                            forwarding_ok = True
                             consecutive_failures = 0
                             backoff = 5.0
                         except (OSError, RuntimeError, subprocess.SubprocessError):
                             time.sleep(min(backoff, 300.0))
                             backoff = min(backoff * 2.0, 300.0)
-                    next_forward_probe = time.monotonic() + 5.0
                 else:
                     time.sleep(5.0)
         finally:

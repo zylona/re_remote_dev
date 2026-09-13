@@ -5,7 +5,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import StrEnum
 from hashlib import sha256
 
@@ -26,6 +26,30 @@ class OAuthState(StrEnum):
     PENDING = "PENDING"
     AUTHENTICATED = "AUTHENTICATED"
     FAILED = "FAILED"
+
+
+class ForwardState(StrEnum):
+    """Lifecycle state for an isolated SSH forwarding process."""
+
+    ABSENT = "ABSENT"
+    STARTING = "STARTING"
+    READY = "READY"
+    DEGRADED = "DEGRADED"
+    STOPPING = "STOPPING"
+    FAILED = "FAILED"
+
+
+@dataclass(frozen=True, slots=True)
+class ForwardStatus:
+    """Observable, secret-free state of one dedicated forwarder."""
+
+    kind: str
+    state: ForwardState = ForwardState.ABSENT
+    pid: int | None = None
+    local_port: int | None = None
+    remote_port: int | None = None
+    last_error: str | None = None
+    last_success: float | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -64,3 +88,6 @@ class TargetStatus:
     control_path: str | None = None
     proxy_available: bool = False
     session_count: int = 0
+    proxy_forward: ForwardStatus = field(default_factory=lambda: ForwardStatus("proxy"))
+    event_forward: ForwardStatus = field(default_factory=lambda: ForwardStatus("event"))
+    oauth_forward: ForwardStatus = field(default_factory=lambda: ForwardStatus("oauth"))

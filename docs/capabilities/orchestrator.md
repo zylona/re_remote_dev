@@ -22,23 +22,26 @@ Codex 安装由 `roles/codex` 提供一个薄包装命令：真实二进制位�
 
 事件通过目标机 `127.0.0.1:4228` 发送，经 SSH remote forwarding 到本机编排器的
 `127.0.0.1:4230`。本机服务同时保留 Unix socket 供 CLI 查询。每次会话的 nonce 由后续
-ControlMaster 生命周期写入目标机用户目录；未建立受管会话时包装器不会发送事件。事件只包含
+受管 SSH 生命周期写入目标机用户目录；未建立受管会话时包装器不会发送事件。事件只包含
 目标摘要、nonce、PID 和退出码，不包含命令行、OAuth 内容、代理凭据或工作区数据。正式
-会话由 `SessionManager` 计算目标摘要、创建/复用 ControlMaster、写入每次轮换的 nonce，
-并在编排器中注册 ControlPath；停止时按相反顺序注销并清理。
+普通 SSH 不复用项目 ControlMaster。`SessionManager` 维护独立的受管连接，
+代理由独立的 `ProxyForwarder`（`ssh -N -R`、`ControlMaster=no`）承载；P3 起事件也由独立的
+`EventForwarder`（目标 4228 → 本机 4230）承载，避免代理或事件流量阻塞交互终端。两个进程
+均启用 `ExitOnForwardFailure` 和保活参数，停止时按相反顺序注销并清理。
 
 ## P4 OAuth callback 转发
 
-`OAuthManager` 只操作已经建立的 SSH ControlMaster，通过 `ssh -O forward` 临时添加
-`127.0.0.1:1455 → 127.0.0.1:1455`，再通过 `ssh -O cancel` 清理。它不解析或改写
-Codex 生成的 OAuth URL，浏览器仍访问原始 localhost callback。
+`OAuthManager` 使用独立 SSH `-N -L` 进程临时添加
+`127.0.0.1:1455 → 目标 127.0.0.1:1455`，登录结束后终止进程清理。它不操作
+ControlMaster、不解析或改写 Codex 生成的 OAuth URL，浏览器仍访问原始 localhost callback。
+IPv4 是必需路径，`::1` IPv6 listener 在系统支持时以 best-effort 方式额外启用。
 
 同一编排器最多维护一个活跃 OAuth callback；第二个目标返回 `OAUTH_BUSY`，避免本机 1455
 被多个远端争抢。清理失败报告 `CLEANUP_FAILED`，而不是误报成功。普通已登录 Codex 不会
 自动开启 1455，4227 代理和 4228 事件转发不受该临时生命周期影响。
 
-收到已注册目标的 `CODEX_START` 后，编排器会自动调用该目标 ControlMaster 的
-`ssh -O forward`；最后一个同目标 Codex 进程发送 `CODEX_EXIT` 时调用 `ssh -O cancel`。
+收到已注册目标的 `CODEX_START` 后，编排器会自动启动独立 callback forwarder；最后一个同目标
+Codex 进程发送 `CODEX_EXIT` 时终止全部 callback forwarder。
 因此用户不需要额外执行登录转发命令。若 1455 已被其他程序占用或 master 不可用，状态
 记为失败但 Codex 本身继续启动，便于用户稍后重试。
 
