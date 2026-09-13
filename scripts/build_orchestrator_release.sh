@@ -21,7 +21,16 @@ EOF
 cat > "$stage_dir/$pkg/bin/remote-dev-orchestrator-server" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
-base_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+script_path="${BASH_SOURCE[0]}"
+while [[ -L "$script_path" ]]; do
+  link_target="$(readlink "$script_path")"
+  if [[ "$link_target" = /* ]]; then
+    script_path="$link_target"
+  else
+    script_path="$(dirname "$script_path")/$link_target"
+  fi
+done
+base_dir="$(cd "$(dirname "$script_path")/.." && pwd)"
 export PYTHONPATH="$base_dir/lib${PYTHONPATH:+:$PYTHONPATH}"
 exec "${PYTHON:-python3}" -m remote_dev.orchestrator "$@"
 EOF
