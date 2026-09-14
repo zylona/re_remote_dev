@@ -4,6 +4,22 @@ P0 只定义本地 SSH/Codex 编排层的身份、状态、事件和错误协议
 
 ## 本地服务安装入口
 
+### 普通 SSH 自动代理
+
+安装本机服务后执行一次：
+
+```bash
+./re-remote ssh-integration-install
+```
+
+受管 SSH 配置会启用 `PermitLocalCommand`，在每次普通 `ssh user@host` 成功连接后调用
+`~/.local/bin/remote-dev-ssh-hook`。该 hook 根据 SSH 最终解析出的主机、用户、端口和密钥，
+为设备 endpoint（主机名/IP + SSH 端口）创建唯一的 systemd user proxy unit，并以独立
+`ssh -N -T -R 127.0.0.1:4227` 维持隧道。同一设备的不同用户和多个窗口共享一个 unit；
+endpoint 锁保证并发登录不会重复绑定远端 4227。交互 SSH 使用 `ControlMaster no`，因此代理
+流量不会阻塞终端输入。优先使用密钥或 ssh-agent；没有可用密钥时，首次 hook 会尝试通过当前
+TTY 让用户输入一次 SSH 密码建立临时隧道，但密码隧道断线后不能无人值守重连。
+
 用户可通过 `./install-local-service`（等价于 `./re-remote local-service-install`）独立安装或刷新
 本地编排器，不触发任何远端恢复。安装器复用 `setup/bootstrap` 的同一实现，将受控 unit 写入
 `~/.config/systemd/user/`，启用 `remote-dev-orchestrator.socket`，刷新服务进程并通过 Unix socket

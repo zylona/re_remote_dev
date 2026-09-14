@@ -1,4 +1,4 @@
-# 本地编排器发布与安装
+# 本地编排器发布
 
 `remote-dev-orchestrator` 是可被其他项目复用的本地 SSH 编排器制品。它只包含用户级 socket 服务和标准库 Python 实现，不携带目标机恢复逻辑，也不要求安装本项目的 Ansible 依赖。
 

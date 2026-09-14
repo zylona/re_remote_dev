@@ -17,7 +17,9 @@ def test_install_is_idempotent_and_preserves_config(tmp_path: Path) -> None:
     assert first == second
     assert "Host github.com" in second
     assert "RemoteForward 127.0.0.1:4227 127.0.0.1:4227" not in second
-    assert "ControlMaster auto" in second
+    assert "ControlMaster no" in second
+    assert "PermitLocalCommand yes" in second
+    assert "remote-dev-ssh-hook" in second
     assert second.count(BEGIN) == 1
 
 

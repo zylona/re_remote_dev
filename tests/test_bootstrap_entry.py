@@ -6,13 +6,13 @@ from remote_dev.cli import app
 from remote_dev.ssh_integration import install, install_target
 
 
-def test_target_ssh_block_precedes_generic_block(tmp_path: Path):
+def test_target_install_migrates_legacy_block_without_adding_device_config(tmp_path: Path):
     install(home=tmp_path)
     install_target(host="vm.example", control_path=tmp_path / ".ssh/remote-dev/cm/digest", identity_file=Path("~/.ssh/id_test"), home=tmp_path)
     config = (tmp_path / ".ssh/config").read_text(encoding="utf-8")
-    assert config.index("Host vm.example") < config.index("Host * !github.com")
-    assert "ControlMaster no" in config
-    assert "ControlPath none" in config
+    assert "Host vm.example" not in config
+    assert config.count("Host * !github.com") == 1
+    assert "LocalCommand ~/.local/bin/remote-dev-ssh-hook" in config
 
 
 def test_setup_decline_cancels_before_target_prompts() -> None:

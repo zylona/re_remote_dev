@@ -110,6 +110,18 @@ all:
 systemctl --user status remote-dev-orchestrator.socket
 ```
 
+安装一次 SSH 自动代理集成后，普通 `ssh user@ip` 会自动为该目标启动独立的 4227 反向隧道，
+无需再手动执行后台 SSH 命令：
+
+```bash
+./re-remote ssh-integration-install
+ssh user@host
+```
+
+该功能优先使用 SSH 密钥或 ssh-agent 认证；同一设备的多用户和多窗口共享一个 systemd user
+unit，不会重复占用远端 4227。纯密码认证首次可在当前终端交互建立隧道，但密码不会保存，
+隧道断线后需要重新认证，无法无人值守自动接管。
+
 也可以从 [Releases](https://github.com/zylona/re_remote_dev/releases) 下载 `remote-dev-orchestrator-*-linux.tar.gz`，先校验 `.sha256`，再运行包内安装器。Release asset 用于长期依赖，Actions artifact 仅用于短期 CI 传递。详见 [docs/release.md](docs/release.md)。
 
 ## 代理与 Codex

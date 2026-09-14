@@ -79,6 +79,11 @@ class TargetKey:
 
         return sha256(self.canonical.encode("utf-8")).hexdigest()[:32]
 
+    @property
+    def endpoint_digest(self) -> str:
+        """Stable identity for one remote network namespace, independent of user."""
+        return sha256(f"{self.hostname}:{self.port}|".encode("utf-8")).hexdigest()[:32]
+
 
 @dataclass(frozen=True, slots=True)
 class TargetStatus:

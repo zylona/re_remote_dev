@@ -16,17 +16,44 @@ def _managed_block(proxy_port: int = 4227, control_port: int = 4228, local_contr
     return "\n".join(
         [
             BEGIN,
-            "Host * !github.com",
-            "  ControlMaster auto",
-            "  ControlPersist 600",
-            "  ControlPath ~/.ssh/remote-dev/cm/%C",
+            # Keep ordinary interactive shells on independent TCP sessions.
+            # The proxy hook owns a separate per-target systemd tunnel; sharing
+            # a ControlMaster would bypass LocalCommand and can add HOL delay.
+            "  ControlMaster no",
+            "  ControlPath none",
             "  ExitOnForwardFailure yes",
             "  ServerAliveInterval 30",
             "  ServerAliveCountMax 3",
+            "  PermitLocalCommand yes",
+            "  LocalCommand ~/.local/bin/remote-dev-ssh-hook %h %p %r",
             END,
             "",
         ]
     )
+
+
+_MANAGED_OPTION_RE = re.compile(
+    r"^[ \t]+(?:ControlMaster\s+no|ControlPath\s+none|ExitOnForwardFailure\s+yes|"
+    r"ServerAliveInterval\s+30|ServerAliveCountMax\s+3|PermitLocalCommand\s+yes|"
+    r"LocalCommand\s+~/.local/bin/remote-dev-ssh-hook\s+%h\s+%p\s+%r)\s*$\n?",
+    re.MULTILINE,
+)
+
+
+def _merge_global_block(content: str, *, proxy_port: int = 4227) -> str:
+    """Embed the managed forwarding options into the existing global block."""
+    match = re.search(r"(?m)^Host[ \t]+\*[ \t]+!github\.com[ \t]*\n", content)
+    if match:
+        next_block = re.search(r"(?m)^(?:Host|Match)[ \t]+", content[match.end():])
+        end = match.end() + (next_block.start() if next_block else len(content[match.end():]))
+        body = _MANAGED_OPTION_RE.sub("", content[match.end():end]).strip("\n")
+        managed = _managed_block(proxy_port=proxy_port)
+        replacement = content[match.start():match.end()] + ((body + "\n") if body else "") + managed
+        return content[:match.start()] + replacement + content[end:]
+    suffix = content.rstrip("\n")
+    if suffix:
+        suffix += "\n\n"
+    return suffix + "Host * !github.com\n" + _managed_block(proxy_port=proxy_port)
 
 
 def _target_block(host: str, control_path: Path, identity_file: Path, *, proxy_port: int = 4227, control_port: int = 4228, local_control_port: int = 4230) -> str:
@@ -65,7 +92,18 @@ def _atomic_write(path: Path, content: str, mode: int) -> None:
 
 def _without_managed_block(content: str) -> str:
     pattern = rf"(?:^|\n){re.escape(BEGIN)}\n.*?{re.escape(END)}\n?(?:\n)?"
-    return re.sub(pattern, "\n", content, flags=re.DOTALL)
+    cleaned = re.sub(pattern, "\n", content, flags=re.DOTALL)
+    # If the installer created the global block solely for its managed rules,
+    # remove that now-empty Host stanza during uninstall.
+    return re.sub(r"(?m)^Host[ \t]+\*[ \t]+!github\.com[ \t]*\n(?:[ \t]*\n)*(?=(?:Host|Match|\Z))", "", cleaned)
+
+
+def _without_target_blocks(content: str) -> str:
+    """Remove legacy per-target blocks created by older releases."""
+    return re.sub(
+        r"(?:^|\n)# >>> remote-dev target [^\n]+ >>>\n.*?# <<< remote-dev target [^\n]+ <<<\n?(?:\n)?",
+        "\n", content, flags=re.DOTALL,
+    )
 
 
 def install(*, home: Path | None = None, proxy_port: int = 4227) -> Path:
@@ -77,31 +115,24 @@ def install(*, home: Path | None = None, proxy_port: int = 4227) -> Path:
     ssh_dir.chmod(0o700)
     original = config.read_text(encoding="utf-8") if config.exists() else ""
     cleaned = _without_managed_block(original)
+    cleaned = _without_target_blocks(cleaned)
     # Migrate the old external-include implementation if present.
     cleaned = re.sub(rf"^\s*{re.escape(INCLUDE)}\s*$\n?", "", cleaned, flags=re.MULTILINE)
-    # Remove exact options from the previous manual-forwarding implementation;
-    # user-specific values remain untouched unless they are these old project
-    # defaults, which would otherwise win due to ssh_config first-value rules.
-    cleaned = re.sub(r"^\s*ControlMaster\s+no\s*$\n?", "", cleaned, flags=re.MULTILINE)
-    cleaned = re.sub(r"^\s*ControlPath\s+none\s*$\n?", "", cleaned, flags=re.MULTILINE)
-    cleaned = re.sub(r"^\s*RemoteForward\s+127\.0\.0\.1:4227\s+127\.0\.0\.1:4227\s*$\n?", "", cleaned, flags=re.MULTILINE)
-    cleaned = cleaned.rstrip("\n") + "\n" + _managed_block(proxy_port=proxy_port)
+    # Migrate only the exact legacy remote-dev forwarding directives; leave
+    # unrelated user forwarding rules untouched.
+    cleaned = re.sub(r"^\s*(?:RemoteForward\s+127\.0\.0\.1:4227\s+127\.0\.0\.1:4227|LocalForward\s+127\.0\.0\.1:1455\s+127\.0\.0\.1:1455)\s*$\n?", "", cleaned, flags=re.MULTILINE)
+    cleaned = _merge_global_block(cleaned, proxy_port=proxy_port)
     if cleaned != original:
         _atomic_write(config, cleaned, 0o600)
     return config
 
 
 def install_target(*, host: str, control_path: Path, identity_file: Path, home: Path | None = None, proxy_port: int = 4227) -> Path:
-    """Insert a target-specific block before the generic block so %C cannot win."""
+    """Migrate legacy target blocks without adding per-device SSH config."""
     root = home or Path.home()
     config = root / ".ssh" / "config"
     original = config.read_text(encoding="utf-8") if config.exists() else ""
-    begin = f"# >>> remote-dev target {host} >>>"
-    end = f"# <<< remote-dev target {host} <<<"
-    cleaned = re.sub(rf"(?:^|\n){re.escape(begin)}\n.*?{re.escape(end)}\n?(?:\n)?", "\n", original, flags=re.DOTALL)
-    block = _target_block(host, control_path, identity_file, proxy_port=proxy_port)
-    marker = cleaned.find(BEGIN)
-    content = cleaned[:marker] + block + cleaned[marker:] if marker >= 0 else cleaned.rstrip("\n") + "\n" + block
+    content = _without_target_blocks(original)
     if content != original:
         _atomic_write(config, content, 0o600)
     return config

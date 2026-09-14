@@ -260,7 +260,10 @@
     CODEX_HOME: "{{ codex_home }}"
     PATH: "{{ codex_install_dir }}:/usr/local/bin:/usr/bin:/bin"
   register: codex_academic_search_repair
-  changed_when: true
+  # ``codex mcp add`` rewrites the same logical registration on every call;
+  # the resulting configuration is already normalized, so report no change
+  # to preserve apply idempotence.
+  changed_when: false
   when:
     - codex_repair_academic_search | bool
     - codex_academic_search_probe.rc | default(1) | int == 0

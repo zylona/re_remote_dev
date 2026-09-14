@@ -127,6 +127,11 @@ def _install_local_orchestrator(*, confirm: bool = True, restore_flow: bool = Tr
     executable = project_root / "re-remote"
     if not executable.is_file():
         raise RuntimeError("未找到项目统一入口 re-remote，请确认仓库文件完整。")
+    hook_source = project_root / "scripts/remote_dev_ssh_hook.py"
+    hook_target = Path.home() / ".local/bin/remote-dev-ssh-hook"
+    hook_target.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    hook_target.write_text(hook_source.read_text(encoding="utf-8"), encoding="utf-8")
+    hook_target.chmod(0o755)
     service = service_dir / "remote-dev-orchestrator.service"
     service_content = (project_root / "systemd/remote-dev-orchestrator.service").read_text(encoding="utf-8")
     service_content = service_content.replace(
@@ -392,7 +397,7 @@ def ssh_integration_install(proxy_port: int = typer.Option(4227, "--proxy-port")
 
     config = install(proxy_port=proxy_port)
     typer.echo(f"SSH 配置已迁移：{config}")
-    typer.echo("已启用共享 ControlMaster 参数；4227/4228 仅由受管 master 创建，避免多窗口重复绑定。")
+    typer.echo("已启用普通 SSH 自动代理 hook；交互窗口使用独立连接，4227 由 per-target user 隧道维护。")
     typer.echo("新建 SSH 连接后生效；已有 ControlMaster 连接不会重新读取配置。")
 
 
@@ -526,6 +531,35 @@ def orchestrator_connect(
     typer.echo(json.dumps({"ok": True, "target": session.target.digest, "control_path": str(session.control_path)}))
     if persistent:
         SessionManager().serve(session)
+
+
+@app.command("ssh-hook", hidden=True)
+def ssh_hook(host: str, port: int = 22, user: str = "") -> None:
+    """SSH LocalCommand hook: ensure a proxy-only target unit, then return."""
+    if os.environ.get("REMOTE_DEV_SSH_HOOK") == "1" or not user:
+        return
+    from .orchestrator.model import TargetKey
+    from .orchestrator.proxy_persistent import ensure
+    # Resolve the same identity SSH will use.  BatchMode deliberately avoids
+    # turning a normal interactive login into a second password prompt.
+    probe = subprocess.run(["ssh", "-G", host], check=False, capture_output=True, text=True, timeout=5)
+    identity = None
+    resolved_host, resolved_user, resolved_port = host, user, port
+    if probe.returncode == 0:
+        for line in probe.stdout.splitlines():
+            key, _, value = line.partition(" ")
+            if key == "hostname": resolved_host = value.strip()
+            elif key == "user" and not user: resolved_user = value.strip()
+            elif key == "port": resolved_port = int(value.strip())
+            elif key == "identityfile" and identity is None and value.strip() != "none": identity = Path(value.strip()).expanduser()
+    if identity is None or not identity.exists():
+        return
+    target = TargetKey(resolved_host, resolved_port, resolved_user)
+    try:
+        ensure(target, identity)
+    except (OSError, subprocess.SubprocessError, ValueError):
+        # Never break the user's original SSH login because proxy setup failed.
+        return
 
 
 @orchestrator_app.command("enable-persistent")
