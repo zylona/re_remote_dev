@@ -132,6 +132,11 @@ def _install_local_orchestrator(*, confirm: bool = True, restore_flow: bool = Tr
     hook_target.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     hook_target.write_text(hook_source.read_text(encoding="utf-8"), encoding="utf-8")
     hook_target.chmod(0o755)
+    # Keep the source-tree installer behavior identical to the standalone
+    # release installer: merge one marked, idempotent SSH integration block.
+    from .ssh_integration import install as install_ssh
+
+    install_ssh()
     service = service_dir / "remote-dev-orchestrator.service"
     service_content = (project_root / "systemd/remote-dev-orchestrator.service").read_text(encoding="utf-8")
     service_content = service_content.replace(

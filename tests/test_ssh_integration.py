@@ -48,6 +48,25 @@ def test_existing_inline_rule_is_preserved_without_external_include(tmp_path: Pa
     assert "LocalForward 127.0.0.1:1455 127.0.0.1:1455" not in updated
 
 
+def test_duplicate_managed_blocks_are_collapsed_to_one(tmp_path: Path) -> None:
+    ssh = tmp_path / ".ssh"
+    ssh.mkdir()
+    config = ssh / "config"
+    block = (
+        f"{BEGIN}\nHost * !github.com\n"
+        "  ControlMaster no\n  PermitLocalCommand yes\n"
+        "# <<< remote-dev ssh integration <<<\n"
+    )
+    config.write_text(block + "Host * !github.com\n  User demo\n" + block, encoding="utf-8")
+
+    install(home=tmp_path)
+    updated = config.read_text(encoding="utf-8")
+    assert updated.count(BEGIN) == 1
+    assert updated.count("LocalCommand ~/.local/bin/remote-dev-ssh-hook %h %p %r") == 1
+    assert updated.count("ControlMaster no") == 1
+    assert "User demo" in updated
+
+
 def test_old_managed_oauth_forward_is_migrated_to_manual_help_flow(tmp_path: Path) -> None:
     ssh = tmp_path / ".ssh"
     ssh.mkdir()

@@ -1,6 +1,6 @@
 # 本地编排器发布
 
-`remote-dev-orchestrator` 是可被其他项目复用的本地 SSH 编排器制品。它只包含用户级 socket 服务和标准库 Python 实现，不携带目标机恢复逻辑，也不要求安装本项目的 Ansible 依赖。
+`remote-dev-orchestrator` 是可被其他项目复用的完整本地 SSH 集成制品。它包含用户级 socket 服务、SSH hook、幂等 SSH 配置安装器和标准库 Python 实现，不携带目标机恢复逻辑，也不要求安装本项目的 Ansible 依赖。
 
 ## 发布
 
@@ -33,7 +33,7 @@ tar -xzf remote-dev-orchestrator-v0.1.0-linux.tar.gz
 ./remote-dev-orchestrator-v0.1.0-linux/install
 ```
 
-安装器将版本放入 `~/.local/share/remote-dev-orchestrator/versions/`，原子更新 `current` 链接，写入 `~/.config/systemd/user`，启用 socket，并仅在需要时重启服务。升级重复执行即可；卸载执行包内 `uninstall`。服务以当前用户运行，SSH 密钥、目标配置和密码不会进入制品。
+安装器将版本放入 `~/.local/share/remote-dev-orchestrator/versions/`，原子更新 `current` 链接，写入 `~/.config/systemd/user`，安装 hook 到 `~/.local/bin`，并将受管规则幂等合并到 `~/.ssh/config`。规则使用 `# >>> remote-dev ssh integration >>>` / `# <<< remote-dev ssh integration <<<` 标记；重复安装会先替换旧标记块，不会追加重复配置，也会迁移旧版外部 Include。升级重复执行即可；卸载执行包内 `uninstall`，仅移除受管区块和 hook。服务以当前用户运行，SSH 密钥、目标配置和密码不会进入制品。
 
 安装后验证：
 

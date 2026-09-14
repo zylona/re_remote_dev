@@ -10,6 +10,8 @@ trap 'rm -rf "$stage_dir"' EXIT
 pkg="remote-dev-orchestrator-v${version}-linux"
 mkdir -p "$stage_dir/$pkg/lib/remote_dev" "$stage_dir/$pkg/bin" "$dist_dir"
 cp -R "$root_dir/src/remote_dev/orchestrator" "$stage_dir/$pkg/lib/remote_dev/"
+cp "$root_dir/src/remote_dev/ssh_integration.py" "$stage_dir/$pkg/lib/remote_dev/ssh_integration.py"
+cp "$root_dir/scripts/remote_dev_ssh_hook.py" "$stage_dir/$pkg/bin/remote-dev-ssh-hook"
 find "$stage_dir/$pkg" -type d -name '__pycache__' -prune -exec rm -rf {} +
 find "$stage_dir/$pkg" -type f -name '*.pyc' -delete
 cp "$root_dir/release/install" "$root_dir/release/uninstall" "$stage_dir/$pkg/"
@@ -34,7 +36,7 @@ base_dir="$(cd "$(dirname "$script_path")/.." && pwd)"
 export PYTHONPATH="$base_dir/lib${PYTHONPATH:+:$PYTHONPATH}"
 exec "${PYTHON:-python3}" -m remote_dev.orchestrator "$@"
 EOF
-chmod 0755 "$stage_dir/$pkg/bin/remote-dev-orchestrator-server" "$stage_dir/$pkg/install" "$stage_dir/$pkg/uninstall"
+chmod 0755 "$stage_dir/$pkg/bin/remote-dev-orchestrator-server" "$stage_dir/$pkg/bin/remote-dev-ssh-hook" "$stage_dir/$pkg/install" "$stage_dir/$pkg/uninstall"
 tar_args=(--sort=name --owner=0 --group=0 --numeric-owner -czf "$dist_dir/$pkg.tar.gz" -C "$stage_dir" "$pkg")
 if [[ -n "${SOURCE_DATE_EPOCH:-}" ]]; then tar_args+=(--mtime="@$SOURCE_DATE_EPOCH"); fi
 tar "${tar_args[@]}"

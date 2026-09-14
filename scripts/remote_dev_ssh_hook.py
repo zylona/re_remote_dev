@@ -50,8 +50,6 @@ def main() -> int:
         # A healthy device-level tunnel is reusable across windows and users.
         if subprocess.run(["systemctl", "--user", "is-active", "--quiet", unit], check=False).returncode == 0:
             return 0
-        if _password_tunnel_exists(hostname, resolved_port, resolved_user):
-            return 0
         result = _ensure_key_unit(directory, unit, digest, hostname, resolved_port, resolved_user, identity)
         if subprocess.run(["systemctl", "--user", "is-active", "--quiet", unit], check=False).returncode != 0:
             return 0

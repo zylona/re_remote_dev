@@ -17,7 +17,7 @@
 - **多窗口稳定性**：Zellij 默认，tmux fallback；持久 ControlMaster 专用于代理/事件转发，普通 SSH 窗口使用独立连接，避免 Codex 流量拖慢终端输入。
 - **受控代理**：把控制端 `127.0.0.1:4227` 临时转发到目标机 loopback，失败和退出自动清理。
 - **可验证、可重跑**：固定 Play 顺序、独立只读 verify、第二次 apply 幂等检查。
-- **可发布制品**：本地编排器可作为 GitHub Release tarball 独立安装和升级。
+- **可发布制品**：完整本地集成包可作为 GitHub Release tarball 独立安装和升级。
 
 ## 工作方式
 
@@ -110,11 +110,11 @@ all:
 systemctl --user status remote-dev-orchestrator.socket
 ```
 
-安装一次 SSH 自动代理集成后，普通 `ssh user@ip` 会自动为该目标启动独立的 4227 反向隧道，
+完整 Release 制品的安装器会同时安装编排器、SSH hook，并将受管规则幂等合并到现有
+`~/.ssh/config`。安装后普通 `ssh user@ip` 会自动为该目标启动独立的 4227 反向隧道，
 无需再手动执行后台 SSH 命令：
 
 ```bash
-./re-remote ssh-integration-install
 ssh user@host
 ```
 
@@ -122,17 +122,19 @@ ssh user@host
 unit，不会重复占用远端 4227。纯密码认证会保持原生 SSH 路径，不启动自动代理隧道；如需代理，
 请改用 SSH 密钥或 ssh-agent。这样不会出现 hook 额外弹出密码提示，也不会保存密码。
 
-也可以从 [v0.1.9 Release](https://github.com/zylona/re_remote_dev/releases/tag/v0.1.9) 下载独立编排器制品。生产环境建议固定版本并校验 SHA256：
+也可以从 [v0.1.10 Release](https://github.com/zylona/re_remote_dev/releases/tag/v0.1.10) 下载完整本地集成制品。生产环境建议固定版本并校验 SHA256：
 
 ```bash
-curl -fLO https://github.com/zylona/re_remote_dev/releases/download/v0.1.9/remote-dev-orchestrator-v0.1.9-linux.tar.gz
-curl -fLO https://github.com/zylona/re_remote_dev/releases/download/v0.1.9/remote-dev-orchestrator-v0.1.9-linux.tar.gz.sha256
-sha256sum -c remote-dev-orchestrator-v0.1.9-linux.tar.gz.sha256
-tar -xzf remote-dev-orchestrator-v0.1.9-linux.tar.gz
-./remote-dev-orchestrator-v0.1.9-linux/install
+curl -fLO https://github.com/zylona/re_remote_dev/releases/download/v0.1.10/remote-dev-orchestrator-v0.1.10-linux.tar.gz
+curl -fLO https://github.com/zylona/re_remote_dev/releases/download/v0.1.10/remote-dev-orchestrator-v0.1.10-linux.tar.gz.sha256
+sha256sum -c remote-dev-orchestrator-v0.1.10-linux.tar.gz.sha256
+tar -xzf remote-dev-orchestrator-v0.1.10-linux.tar.gz
+./remote-dev-orchestrator-v0.1.10-linux/install
 ```
 
-Release asset 用于长期依赖，Actions artifact 仅用于短期 CI 传递。详见 [docs/release.md](docs/release.md)。
+安装器会保留用户已有 SSH 配置，仅更新 `# >>> remote-dev ssh integration >>>` 标记区块；
+重复安装不会重复添加规则。Release asset 用于长期依赖，Actions artifact 仅用于短期 CI 传递。
+详见 [docs/release.md](docs/release.md)。
 
 ## 代理与 Codex
 

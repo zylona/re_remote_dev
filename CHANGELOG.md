@@ -6,6 +6,13 @@
 - P3：Codex 事件回传改为独立 SSH forwarder；编排器不再通过 ControlMaster 探测或补建事件转发，降低终端输入延迟和复用连接故障影响。
 - P4：OAuth localhost:1455 回调改为独立短生命周期 SSH `-N -L` forwarder，避免登录期间操作 ControlMaster；完成或退出时自动清理 IPv4/IPv6 转发。
 - P5：supervisor 现在同时监控代理/事件 forwarder 进程；任一转发异常都会按退避策略重建整组连接，避免单个隧道退出后状态假 READY。
+- 发布制品升级为完整本地集成包：安装器同时部署 systemd user 服务、SSH hook，并以标记区块幂等合并 `~/.ssh/config`；卸载仅移除受管内容。
+
+## [0.1.10]
+
+- 发布完整本地集成安装包。
+- 安装器自动部署编排器、SSH hook，并幂等合并受管 SSH 配置区块。
+- 重复安装不会追加重复规则，卸载仅移除项目管理的内容。
 
 ## [0.1.9]
 
