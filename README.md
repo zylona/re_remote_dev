@@ -7,7 +7,7 @@
 
 用一次受控运行，把一台可 SSH 登录的 Linux 主机恢复成现代远程开发环境：zsh、Antidote、Powerlevel10k、mise、fzf、zoxide、Zellij、Neovim 和 Codex CLI。项目采用 Ansible-first 设计，支持无外网目标机的临时 HTTP 代理，并保持普通 `ssh user@host` 的使用习惯。
 
-> 当前发布版本：`v0.1.7`。已在 Debian 13、Arch/Omarchy 和 openEuler 24.03 上完成真实回归，包含多窗口、多用户共享隧道、断线恢复和 30 分钟连续观察。默认不安装远端常驻 Agent、不开放公网端口、不保存密码或 API Token。
+> 当前发布版本：`v0.1.8`。已在 Debian 13、Arch/Omarchy 和 openEuler 24.03 上完成真实回归，包含多窗口、多用户共享隧道、断线恢复和 30 分钟连续观察。默认不安装远端常驻 Agent、不开放公网端口、不保存密码或 API Token。
 
 ## 特性
 
@@ -122,14 +122,14 @@ ssh user@host
 unit，不会重复占用远端 4227。纯密码认证首次可在当前终端交互建立隧道，但密码不会保存，
 隧道断线后需要重新认证，无法无人值守自动接管。
 
-也可以从 [v0.1.7 Release](https://github.com/zylona/re_remote_dev/releases/tag/v0.1.7) 下载独立编排器制品。生产环境建议固定版本并校验 SHA256：
+也可以从 [v0.1.8 Release](https://github.com/zylona/re_remote_dev/releases/tag/v0.1.8) 下载独立编排器制品。生产环境建议固定版本并校验 SHA256：
 
 ```bash
-curl -fLO https://github.com/zylona/re_remote_dev/releases/download/v0.1.7/remote-dev-orchestrator-v0.1.7-linux.tar.gz
-curl -fLO https://github.com/zylona/re_remote_dev/releases/download/v0.1.7/remote-dev-orchestrator-v0.1.7-linux.tar.gz.sha256
-sha256sum -c remote-dev-orchestrator-v0.1.7-linux.tar.gz.sha256
-tar -xzf remote-dev-orchestrator-v0.1.7-linux.tar.gz
-./remote-dev-orchestrator-v0.1.7-linux/install
+curl -fLO https://github.com/zylona/re_remote_dev/releases/download/v0.1.8/remote-dev-orchestrator-v0.1.8-linux.tar.gz
+curl -fLO https://github.com/zylona/re_remote_dev/releases/download/v0.1.8/remote-dev-orchestrator-v0.1.8-linux.tar.gz.sha256
+sha256sum -c remote-dev-orchestrator-v0.1.8-linux.tar.gz.sha256
+tar -xzf remote-dev-orchestrator-v0.1.8-linux.tar.gz
+./remote-dev-orchestrator-v0.1.8-linux/install
 ```
 
 Release asset 用于长期依赖，Actions artifact 仅用于短期 CI 传递。详见 [docs/release.md](docs/release.md)。
