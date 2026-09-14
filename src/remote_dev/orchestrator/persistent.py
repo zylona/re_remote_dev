@@ -29,6 +29,11 @@ def install(target: TargetKey, identity: Path, *, systemd_dir: Path | None = Non
     path.write_text(content, encoding="utf-8")
     path.chmod(0o600)
     subprocess.run(["systemctl", "--user", "daemon-reload"], check=True)
+    # A target outage can exhaust systemd's start-rate limit while the
+    # supervisor is unable to establish the initial SSH session.  A later
+    # bootstrap is an explicit recovery attempt, so clear that historical
+    # failure before asking systemd to start the unit again.
+    subprocess.run(["systemctl", "--user", "reset-failed", path.name], check=False)
     subprocess.run(["systemctl", "--user", "enable", "--now", path.name], check=True)
     if changed:
         subprocess.run(["systemctl", "--user", "restart", path.name], check=True)

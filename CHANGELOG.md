@@ -7,6 +7,11 @@
 - P4：OAuth localhost:1455 回调改为独立短生命周期 SSH `-N -L` forwarder，避免登录期间操作 ControlMaster；完成或退出时自动清理 IPv4/IPv6 转发。
 - P5：supervisor 现在同时监控代理/事件 forwarder 进程；任一转发异常都会按退避策略重建整组连接，避免单个隧道退出后状态假 READY。
 
+## [0.1.8]
+
+- 修复本机 managed SSH master 因 systemd `start-limit-hit` 后无法通过后续 bootstrap 恢复的问题。
+- 刷新目标连接 unit 前自动清理历史 failed 状态，适用于任意设备和用户。
+
 ## [0.1.6]
 
 - 将代理、Codex 事件和 OAuth 回调全部隔离为独立 SSH forwarder，避免影响交互式 SSH 输入。
