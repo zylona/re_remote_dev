@@ -1,6 +1,6 @@
 [project]
 name = "remote-dev"
-version = "0.1.8"
+version = "0.1.9"
 description = "Ansible-first SSH remote development environment bootstrap"
 readme = "README.md"
 requires-python = ">=3.14,<3.15"

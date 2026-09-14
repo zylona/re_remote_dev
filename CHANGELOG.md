@@ -7,6 +7,12 @@
 - P4：OAuth localhost:1455 回调改为独立短生命周期 SSH `-N -L` forwarder，避免登录期间操作 ControlMaster；完成或退出时自动清理 IPv4/IPv6 转发。
 - P5：supervisor 现在同时监控代理/事件 forwarder 进程；任一转发异常都会按退避策略重建整组连接，避免单个隧道退出后状态假 READY。
 
+## [0.1.9]
+
+- 密码 SSH 登录保持原生连接，不再启动自动 4227 代理或触发第二次密码提示。
+- 只有确认配置的 SSH 私钥可非交互登录时，hook 才创建自动代理隧道。
+- 降低密码测试环境、脚本和多窗口登录的认证干扰。
+
 ## [0.1.8]
 
 - 修复本机 managed SSH master 因 systemd `start-limit-hit` 后无法通过后续 bootstrap 恢复的问题。

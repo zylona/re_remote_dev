@@ -39,26 +39,27 @@ def main() -> int:
     directory.mkdir(parents=True, exist_ok=True, mode=0o700)
     state_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
     _cleanup_legacy_units(directory, unit, hostname, resolved_port)
-    # A healthy device-level tunnel is reusable even when this account has no
-    # key of its own (for example, a password-only secondary user).
-    if subprocess.run(["systemctl", "--user", "is-active", "--quiet", unit], check=False).returncode == 0:
+    # Password-authenticated sessions deliberately stay native.  LocalCommand
+    # cannot reliably tell which method authenticated the parent SSH process;
+    # probe the configured key without allowing password fallback, and only
+    # install a proxy sidecar when that key is actually accepted.
+    if identity is None or not _key_auth_works(hostname, resolved_port, resolved_user, identity):
         return 0
-    if identity is None:
-        return _password_fallback(hostname, resolved_port, resolved_user, digest, state_dir)
     with (state_dir / f"{digest}.lock").open("w", encoding="utf-8") as lock:
         fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+        # A healthy device-level tunnel is reusable across windows and users.
+        if subprocess.run(["systemctl", "--user", "is-active", "--quiet", unit], check=False).returncode == 0:
+            return 0
+        if _password_tunnel_exists(hostname, resolved_port, resolved_user):
+            return 0
         result = _ensure_key_unit(directory, unit, digest, hostname, resolved_port, resolved_user, identity)
-    # A configured IdentityFile does not prove that this login used a key.
-    # If the key-sidecar could not become active, offer one interactive
-    # password attempt.  The password is handled by ssh itself and never
-    # enters a unit, state file, argument list, or log.
-    if subprocess.run(["systemctl", "--user", "is-active", "--quiet", unit], check=False).returncode != 0:
-        return _password_fallback(hostname, resolved_port, resolved_user, digest, state_dir)
-    # Type=simple becomes active before ssh has completed remote-forward
-    # negotiation.  A short settle window prevents the first remote command
-    # in a newly opened SSH session from racing the 4227 listener.
-    time.sleep(0.6)
-    return result
+        if subprocess.run(["systemctl", "--user", "is-active", "--quiet", unit], check=False).returncode != 0:
+            return 0
+        # Type=simple becomes active before ssh has completed remote-forward
+        # negotiation. A short settle window prevents the first remote
+        # command in a newly opened SSH session from racing the listener.
+        time.sleep(0.6)
+        return result
 
 def _cleanup_legacy_units(directory: Path, current_unit: str, hostname: str, port: int) -> None:
     """Remove only older remote-dev proxy units for this endpoint."""
@@ -88,25 +89,16 @@ def _ensure_key_unit(directory: Path, unit: str, digest: str, hostname: str, por
     subprocess.run(["systemctl", "--user", "enable", "--now", unit], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     return 0
 
-def _password_fallback(hostname: str, port: int, user: str, digest: str, state_dir: Path) -> int:
-    """Create a one-shot interactive password tunnel without persisting secrets."""
-    try:
-        tty = open("/dev/tty", "r+b", buffering=0)
-    except OSError:
-        return 0
-    with (state_dir / f"{digest}.lock").open("w", encoding="utf-8") as lock:
-        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
-        needle = f"-R 127.0.0.1:4227:127.0.0.1:4227 {user}@{hostname}"
-        existing = subprocess.run(["pgrep", "-af", needle], capture_output=True, text=True, check=False)
-        if existing.returncode == 0:
-            tty.close()
-            return 0
-        command = ["/usr/bin/ssh", "-fNT", "-o", "ExitOnForwardFailure=yes", "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=3", "-o", "PreferredAuthentications=password", "-o", "PubkeyAuthentication=no", "-p", str(port), "-R", "127.0.0.1:4227:127.0.0.1:4227", f"{user}@{hostname}"]
-        try:
-            subprocess.run(command, stdin=tty, stdout=tty, stderr=tty, check=False)
-        finally:
-            tty.close()
-    time.sleep(0.6)
-    return 0
+def _key_auth_works(hostname: str, port: int, user: str, identity: Path) -> bool:
+    command = [
+        "/usr/bin/ssh", "-F", "/dev/null", "-o", "BatchMode=yes",
+        "-o", "ConnectTimeout=5", "-o", "PreferredAuthentications=publickey",
+        "-o", "PasswordAuthentication=no", "-o", "ControlMaster=no",
+        "-o", "ControlPath=none", "-i", str(identity), "-p", str(port),
+        f"{user}@{hostname}", "true",
+    ]
+    result = subprocess.run(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
+    return result.returncode == 0
+
 
 if __name__ == "__main__": raise SystemExit(main())

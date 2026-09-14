@@ -566,7 +566,7 @@ wheels = [
 
 [[package]]
 name = "remote-dev"
-version = "0.1.8"
+version = "0.1.9"
 source = { editable = "." }
 dependencies = [
     { name = "rich" },
