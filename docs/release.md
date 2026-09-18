@@ -19,8 +19,8 @@ https://github.com/zylona/re_remote_dev/releases/latest/download/remote-dev-orch
 发布前必须在目标 VM `192.168.122.196` 上完成多窗口 SSH、ControlMaster 自动恢复、4227/4228 转发、VS Code Remote-SSH 打开远程目录以及 Ctrl-C 清理；只看到 systemd `active` 不足以判定稳定。若 `NRestarts` 持续增加，应先修复隧道/主机密钥问题，不要打 tag。
 
 ```sh
-git tag v0.1.0
-git push origin v0.1.0
+git tag v0.1.13
+git push origin v0.1.13
 ```
 
 ## 安装
@@ -28,17 +28,17 @@ git push origin v0.1.0
 从 Release 下载 tar.gz 和 `.sha256`，校验后解压并执行包内安装器：
 
 ```sh
-sha256sum -c remote-dev-orchestrator-v0.1.0-linux.tar.gz.sha256
-tar -xzf remote-dev-orchestrator-v0.1.0-linux.tar.gz
-./remote-dev-orchestrator-v0.1.0-linux/install
+sha256sum -c remote-dev-orchestrator-v0.1.13-linux.tar.gz.sha256
+tar -xzf remote-dev-orchestrator-v0.1.13-linux.tar.gz
+./remote-dev-orchestrator-v0.1.13-linux/install
 ```
 
-安装器将版本放入 `~/.local/share/remote-dev-orchestrator/versions/`，先写入暂存目录，再原子更新 `current` 链接；旧版本目录保留用于回滚。安装时会迁移旧版全局 SSH hook 和旧版 `remote-dev-master-*` unit，不触碰无关 user unit。P1 起默认不向 `~/.ssh/config` 写入新的 `LocalCommand` 或项目 forwarding 规则；普通 SSH 保持原生，显式 `remote-dev connect` resolver 入口将在后续阶段实现。VS Code Remote‑SSH 直接使用普通 `~/.ssh/config`。重复安装不会追加规则，也会迁移旧版外部 Include。升级中断时旧 `current` 仍可用；可执行包内 `rollback VERSION` 回滚到已安装版本。卸载执行包内 `uninstall`，仅移除受管 unit、区块和旧版受管快照。服务以当前用户运行，SSH 密钥、目标配置和密码不会进入制品。
+安装器将版本放入 `~/.local/share/remote-dev-orchestrator/versions/`，先写入暂存目录，再原子更新 `current` 链接；旧版本目录保留用于回滚。安装时会迁移旧版全局 SSH hook 和旧版 `remote-dev-master-*` unit，不触碰无关 user unit。默认不会向 `~/.ssh/config` 写入新的 `LocalCommand` 或项目 forwarding 规则，普通 `ssh user@host` 和 VS Code Remote‑SSH 保持原生。需要 4227 代理转发时使用制品提供的 `tssh user@host`；它通过 `ssh -G` 解析当前 SSH 配置中的 `IdentityFile`，申请 endpoint lease 后启动或复用独立 forwarder。显式 `-i` 仍可覆盖自动解析结果。重复安装不会追加规则，也会迁移旧版外部 Include。升级中断时旧 `current` 仍可用；可执行包内 `rollback VERSION` 回滚到已安装版本。卸载执行包内 `uninstall`，仅移除受管 unit、区块和旧版受管快照。服务以当前用户运行，SSH 密钥、目标配置和密码不会进入制品。
 
 回滚到已安装版本：
 
 ```sh
-./remote-dev-orchestrator-v0.1.0-linux/rollback 0.1.0
+./remote-dev-orchestrator-v0.1.13-linux/rollback 0.1.10
 ```
 
 安装后验证：
@@ -47,6 +47,8 @@ tar -xzf remote-dev-orchestrator-v0.1.0-linux.tar.gz
 systemctl --user is-active remote-dev-orchestrator.socket
 remote-dev-orchestrator-server --help # 仅检查入口；服务由 systemd 启动
 tssh --help # 带 4227 转发的 SSH 入口
+tssh user@host # 自动使用 ~/.ssh/config 中解析出的 IdentityFile
+tssh -i ~/.ssh/id_ed25519 user@host # 显式指定密钥
 ```
 
 首次使用本项目时，`./re-remote bootstrap` 仍负责目标机恢复和注册；已安装的独立服务可供其他项目直接复用同一 Unix socket 与 ControlMaster 生命周期。VS Code Remote-SSH 默认使用普通 `~/.ssh/config`；安装器不会生成或维护 `config-vscode`，也不会向普通配置注入 remote-dev hook、4227 或 1455 转发。

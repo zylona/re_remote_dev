@@ -1,7 +1,7 @@
 # 本地编排层能力契约（现行实现与重构基线）
 
 > P0 重构基线：普通 `ssh user@host` 必须保持原生，不再默认触发项目 hook。自动代理由
-> `remote-dev connect user@host` 显式申请；VS Code Remote-SSH、Git、scp、rsync 不读取
+> `tssh user@host` 显式申请；VS Code Remote-SSH、Git、scp、rsync 不读取
 > 项目编排配置。下文“普通 SSH 自动代理”描述的是旧版兼容实现，进入 P1 后将移除默认启用。
 
 P0 只定义本地 SSH/Codex 编排层的身份、状态、事件和错误协议，不建立 SSH 连接，不修改用户 SSH 配置，不写入远端，不启动 systemd 服务。
@@ -38,8 +38,20 @@ activation 保证服务可用；是否在完全退出登录后继续运行由系
 P1 起本地服务安装和 bootstrap 会迁移旧版全局 hook，并在写入前创建带时间戳的
 `~/.ssh/remote-dev/backups/config.*~` 备份；不会新增 `LocalCommand`、`PermitLocalCommand`、
 `ControlMaster no`、`ControlPath none` 或项目固定转发规则。普通 SSH、VS Code Remote-SSH、
-Git、scp 和 rsync 不再触发 remote-dev 服务。自动代理由 resolver 的显式
-`remote-dev connect user@host` 申请。
+Git、scp 和 rsync 不再触发 remote-dev 服务。自动代理由 Release 制品提供的
+`tssh user@host` 显式申请。
+
+### P1.1 `tssh` 独立转发入口
+
+Release 制品提供 `tssh` 作为独立的 SSH 入口。它不替换普通 `ssh`，而是在启动原生 SSH 前
+向本地 Unix socket 申请 endpoint lease，并由 endpoint 级 forwarder 把控制端
+`127.0.0.1:4227` 暴露为目标机 loopback 的 `127.0.0.1:4227`。同一设备、不同用户或多个窗口
+共享一个 forwarder；最后一个 lease 释放后才清理隧道。
+
+`tssh user@host` 会调用 `ssh -G user@host` 读取 OpenSSH 最终配置，自动选择可用的
+`IdentityFile`；也可以用 `-i` 显式覆盖。密码不会保存，密码登录请使用原生 `ssh`。普通 SSH
+的 stdin/stdout 不经过编排器，因而不会被代理流量或 forwarder 重连阻塞。转发失败只影响
+`tssh` 的代理能力，不修改普通 SSH 的认证和连接路径。
 
 ## P2 Endpoint 注册协议
 
@@ -76,8 +88,8 @@ Codex 安装由 `roles/codex` 提供一个薄包装命令：真实二进制位�
 
 ## P4 会话 Lease 与自动清理
 
-`remote-dev connect user@host` 会向本地编排器申请随机 `session_id` lease，然后启动原生
-SSH。编排器为 lease 记录 endpoint、候选用户、密钥指纹和最后 heartbeat，不记录密码或完整
+`tssh user@host` 会向本地编排器申请随机 `session_id` lease，然后启动原生 SSH。编排器为
+lease 记录 endpoint、候选用户、密钥指纹和最后 heartbeat，不记录密码或完整
 命令行。连接进程每 30 秒发送一次 heartbeat；重复 acquire 使用同一 `session_id` 幂等返回，
 会话退出调用 `release`，超过 120 秒未 heartbeat 的孤儿 lease 会被自动释放。只有 endpoint
 的最后一个 lease 释放时，才允许停止该 endpoint 的 4227 forwarder；其他用户仍在线时不会

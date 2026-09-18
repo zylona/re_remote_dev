@@ -111,11 +111,12 @@ systemctl --user status remote-dev-orchestrator.socket
 ```
 
 完整 Release 制品的安装器会安装编排器和迁移工具，并清理旧版全局 SSH hook。P1 起普通
-`ssh user@ip` 保持原生连接；需要代理转发时使用显式 resolver，它申请会话 lease 后再启动
+`ssh user@ip` 保持原生连接；需要代理转发时使用独立的 `tssh` 入口，它申请会话 lease 后再启动
 原生 SSH：
 
 ```bash
-./re-remote connect user@host -i ~/.ssh/id_ed25519
+tssh user@host
+tssh -i ~/.ssh/id_ed25519 user@host
 ```
 
 连接期间每 30 秒自动续租，退出或异常断线后由编排器释放 lease；同一 endpoint 的多用户、多
@@ -131,8 +132,9 @@ tssh user@host -i ~/.ssh/id_ed25519
 
 `tssh` 与普通 `ssh` 使用相同的终端体验，但会先申请项目 Lease，并自动建立或复用远端
 `127.0.0.1:4227` 转发。`-i`/`-p` 可放在目标前后；复杂 SSH 参数建议先写入普通
-`~/.ssh/config`，再使用 `tssh user@host`。`tssh` 依赖 SSH 密钥或 ssh-agent；密码登录请
-继续使用普通 `ssh`。
+`~/.ssh/config`，再使用 `tssh user@host`。如果不显式传 `-i`，`tssh` 会通过 `ssh -G` 自动
+解析当前 SSH 配置中的 `IdentityFile`；`-i` 可覆盖该结果。`tssh` 依赖 SSH 密钥或 ssh-agent；
+密码登录请继续使用普通 `ssh`。
 
 代理功能优先使用 SSH 密钥或 ssh-agent 认证；同一设备的多用户和多窗口共享一个 endpoint
 隧道，不会重复占用远端 4227。纯密码认证保持原生 SSH 路径，不参与无人值守自动接管。
@@ -142,7 +144,7 @@ tssh user@host -i ~/.ssh/id_ed25519
 ```bash
 curl -fLO https://github.com/zylona/re_remote_dev/releases/download/v0.1.13/remote-dev-orchestrator-v0.1.13-linux.tar.gz
 curl -fLO https://github.com/zylona/re_remote_dev/releases/download/v0.1.13/remote-dev-orchestrator-v0.1.13-linux.tar.gz.sha256
-sha256sum -c remote-dev-orchestrator-v0.1.10-linux.tar.gz.sha256
+sha256sum -c remote-dev-orchestrator-v0.1.13-linux.tar.gz.sha256
 tar -xzf remote-dev-orchestrator-v0.1.13-linux.tar.gz
 ./remote-dev-orchestrator-v0.1.13-linux/install
 ```
