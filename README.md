@@ -128,6 +128,7 @@ Release 制品安装后会额外提供 `tssh` 命令：
 ```bash
 tssh user@host
 tssh user@host -i ~/.ssh/id_ed25519
+tssh --version
 ```
 
 `tssh` 与普通 `ssh` 使用相同的终端体验，但会先申请项目 Lease，并自动建立或复用远端
@@ -136,17 +137,21 @@ tssh user@host -i ~/.ssh/id_ed25519
 解析当前 SSH 配置中的 `IdentityFile`；`-i` 可覆盖该结果。`tssh` 依赖 SSH 密钥或 ssh-agent；
 密码登录请继续使用普通 `ssh`。
 
+Codex 登录要求本机 `127.0.0.1:1455` 空闲，因为 OpenAI OAuth 的回调地址固定为
+`http://localhost:1455/auth/callback`。如果该端口被 VS Code 或其他程序占用，编排器会在
+状态中报告 `PORT_CONFLICT`，不会终止占用端口的程序；关闭占用程序后重新启动 `codex` 即可。
+
 代理功能优先使用 SSH 密钥或 ssh-agent 认证；同一设备的多用户和多窗口共享一个 endpoint
 隧道，不会重复占用远端 4227。纯密码认证保持原生 SSH 路径，不参与无人值守自动接管。
 
-也可以从 [v0.1.14 Release](https://github.com/zylona/re_remote_dev/releases/tag/v0.1.14) 下载完整本地集成制品。生产环境建议固定版本并校验 SHA256：
+也可以从 [v0.1.15 Release](https://github.com/zylona/re_remote_dev/releases/tag/v0.1.15) 下载完整本地集成制品。生产环境建议固定版本并校验 SHA256：
 
 ```bash
-curl -fLO https://github.com/zylona/re_remote_dev/releases/download/v0.1.14/remote-dev-orchestrator-v0.1.14-linux.tar.gz
-curl -fLO https://github.com/zylona/re_remote_dev/releases/download/v0.1.14/remote-dev-orchestrator-v0.1.14-linux.tar.gz.sha256
-sha256sum -c remote-dev-orchestrator-v0.1.13-linux.tar.gz.sha256
-tar -xzf remote-dev-orchestrator-v0.1.14-linux.tar.gz
-./remote-dev-orchestrator-v0.1.14-linux/install
+curl -fLO https://github.com/zylona/re_remote_dev/releases/download/v0.1.15/remote-dev-orchestrator-v0.1.15-linux.tar.gz
+curl -fLO https://github.com/zylona/re_remote_dev/releases/download/v0.1.15/remote-dev-orchestrator-v0.1.15-linux.tar.gz.sha256
+sha256sum -c remote-dev-orchestrator-v0.1.15-linux.tar.gz.sha256
+tar -xzf remote-dev-orchestrator-v0.1.15-linux.tar.gz
+./remote-dev-orchestrator-v0.1.15-linux/install
 ```
 
 安装器会迁移并备份旧版 `# >>> remote-dev ssh integration >>>` 标记区块，但默认不再写入全局

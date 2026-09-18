@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import socket
 import subprocess
 import threading
 from dataclasses import dataclass
@@ -79,6 +80,16 @@ class OAuthManager:
             return self._active
 
     def _start_process(self, target: TargetKey, identity_file: Path, bind: str) -> ForwardProcess:
+        if bind == "127.0.0.1":
+            probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            try:
+                if probe.connect_ex(("127.0.0.1", self.local_port)) == 0:
+                    raise OAuthError(
+                        "PORT_CONFLICT",
+                        "本机 127.0.0.1:1455 已被其他程序占用；请关闭占用该端口的程序后重试 Codex 登录",
+                    )
+            finally:
+                probe.close()
         process = subprocess.Popen(
             self._command(target, identity_file, bind), stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,

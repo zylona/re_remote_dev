@@ -18,9 +18,17 @@ class LiveProcess:
     def kill(self): pass
 
 
+class FreePortProbe:
+    def connect_ex(self, address):
+        return 111
+    def close(self):
+        pass
+
+
 def test_oauth_uses_standalone_forwarders_and_is_single_active(monkeypatch, tmp_path: Path):
     calls = []
     monkeypatch.setattr("remote_dev.orchestrator.oauth.subprocess.Popen", lambda args, **kwargs: calls.append(args) or LiveProcess())
+    monkeypatch.setattr("remote_dev.orchestrator.oauth.socket.socket", lambda *args, **kwargs: FreePortProbe())
     manager = OAuthManager()
     first = TargetKey("one", 22, "u")
     second = TargetKey("two", 22, "u")
@@ -35,6 +43,7 @@ def test_oauth_uses_standalone_forwarders_and_is_single_active(monkeypatch, tmp_
 def test_oauth_finish_stops_forwarders_and_is_idempotent(monkeypatch, tmp_path: Path):
     processes = []
     monkeypatch.setattr("remote_dev.orchestrator.oauth.subprocess.Popen", lambda *args, **kwargs: processes.append(LiveProcess()) or processes[-1])
+    monkeypatch.setattr("remote_dev.orchestrator.oauth.socket.socket", lambda *args, **kwargs: FreePortProbe())
     manager = OAuthManager()
     target = TargetKey("host", 22, "u")
     manager.start(target, identity_file=tmp_path / "key")

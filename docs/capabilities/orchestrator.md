@@ -56,6 +56,10 @@ Codex shim 时，Codex 启动和 OAuth URL 事件会经 4228 到达本地编排�
 或 forwarder 重连阻塞。转发失败只影响
 `tssh` 的代理能力，不修改普通 SSH 的认证和连接路径。
 
+Codex 的 OAuth redirect URI 固定使用 `http://localhost:1455/auth/callback`，因此本机 1455
+必须空闲；编排器不会抢占或终止 VS Code 等其他程序的监听。端口冲突会返回明确的
+`PORT_CONFLICT` 状态，关闭占用进程后重新启动 Codex 即可。`tssh --version` 输出当前制品版本。
+
 ## P2 Endpoint 注册协议
 
 P2 引入本地 Unix socket 的 endpoint lease 协议，但暂不创建真实 SSH 转发。resolver 使用

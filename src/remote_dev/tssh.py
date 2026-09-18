@@ -13,6 +13,13 @@ from pathlib import Path
 from typing import Any
 
 
+def _version() -> str:
+    try:
+        return (Path(__file__).resolve().parents[2] / "VERSION").read_text(encoding="utf-8").strip()
+    except OSError:
+        return "unknown"
+
+
 def _socket_path() -> Path:
     runtime = os.environ.get("XDG_RUNTIME_DIR", f"/tmp/remote-dev-{os.getuid()}")
     return Path(runtime) / "remote-dev" / "orchestrator.sock"
@@ -86,6 +93,7 @@ def _resolve_identity(destination: str, explicit: str | None) -> str | None:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="tssh", description="使用 remote-dev 4227 转发连接 SSH 目标")
+    parser.add_argument("--version", action="version", version=f"%(prog)s {_version()}")
     parser.add_argument("destination", help="SSH 目标，格式为 user@host 或 host")
     parser.add_argument("-i", "--identity", help="SSH 私钥路径")
     parser.add_argument("-p", "--port", type=int, default=22, help="SSH 端口")

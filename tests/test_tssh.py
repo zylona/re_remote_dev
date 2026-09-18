@@ -1,4 +1,4 @@
-from remote_dev.tssh import _parse_destination, _ssh_command
+from remote_dev.tssh import _parse_destination, _ssh_command, _version
 
 
 def test_tssh_destination_parsing():
@@ -15,3 +15,7 @@ def test_tssh_places_destination_before_remote_command():
         "echo",
         "ok",
     ]
+
+
+def test_tssh_version_is_available():
+    assert _version()
