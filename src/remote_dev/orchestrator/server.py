@@ -191,6 +191,37 @@ class OrchestratorServer:
                 if isinstance(identity_file, str) and identity_file:
                     session["identity_file"] = identity_file
                 self.sessions[session_id] = session
+                if isinstance(identity_file, str) and identity_file:
+                    # The standalone tssh endpoint has no ControlMaster, but
+                    # its event forward still needs a target registration so
+                    # Codex OAuth events can start the direct 1455 callback
+                    # forwarder.  The target digest intentionally matches the
+                    # remote shim's user/host identity (empty fingerprint).
+                    target = TargetKey(endpoint.hostname, endpoint.port, user)
+                    previous_target = self.targets.get(target.digest)
+                    self._identity_files[target.digest] = Path(identity_file).expanduser()
+                    if previous_target is None:
+                        self.targets[target.digest] = TargetStatus(
+                            target=target,
+                            master=MasterState.READY,
+                            control_path=None,
+                            proxy_available=True,
+                            session_count=1,
+                            proxy_forward=ForwardStatus("proxy", ForwardState.READY, remote_port=4227, local_port=4227),
+                            event_forward=ForwardStatus("event", ForwardState.READY, remote_port=4228, local_port=4230),
+                        )
+                    else:
+                        self.targets[target.digest] = TargetStatus(
+                            target=previous_target.target,
+                            master=previous_target.master,
+                            oauth=previous_target.oauth,
+                            control_path=previous_target.control_path,
+                            proxy_available=True,
+                            session_count=previous_target.session_count + 1,
+                            proxy_forward=previous_target.proxy_forward,
+                            event_forward=previous_target.event_forward,
+                            oauth_forward=previous_target.oauth_forward,
+                        )
                 if record["session_count"] == 1 and isinstance(identity_file, str) and identity_file:
                     try:
                         self.endpoint_forwarder.start(endpoint, user, Path(identity_file).expanduser())
@@ -208,6 +239,25 @@ class OrchestratorServer:
                 record = self.endpoints.get(previous["endpoint_digest"])
                 return {"ok": True, "endpoint_digest": previous["endpoint_digest"], "session_count": record["session_count"] if record else 0}
             self.sessions.pop(session_id, None)
+            if previous.get("identity_file"):
+                target = TargetKey(str(endpoint.hostname), int(endpoint.port), str(previous["user"]))
+                target_status = self.targets.get(target.digest)
+                if target_status is not None:
+                    if target_status.session_count <= 1:
+                        self.targets.pop(target.digest, None)
+                        self._identity_files.pop(target.digest, None)
+                    else:
+                        self.targets[target.digest] = TargetStatus(
+                            target=target_status.target,
+                            master=target_status.master,
+                            oauth=target_status.oauth,
+                            control_path=target_status.control_path,
+                            proxy_available=target_status.proxy_available,
+                            session_count=target_status.session_count - 1,
+                            proxy_forward=target_status.proxy_forward,
+                            event_forward=target_status.event_forward,
+                            oauth_forward=target_status.oauth_forward,
+                        )
             record = self.endpoints.get(previous["endpoint_digest"])
             if record is None:
                 return {"ok": True, "released": True}
@@ -293,10 +343,10 @@ class OrchestratorServer:
             return {"ok": False, "error": "TARGET_NOT_FOUND"}
         if event.event == "CODEX_START":
             self._oauth_browser_opened.discard(event.target)
-            oauth_state = OAuthState.PENDING if status.control_path else OAuthState.FAILED
+            oauth_state = OAuthState.PENDING if (status.control_path or event.target in self._identity_files) else OAuthState.FAILED
             oauth_forward = status.oauth_forward
             try:
-                if status.control_path:
+                if status.control_path or event.target in self._identity_files:
                     oauth_kwargs = {"control_path": status.control_path}
                     if event.target in self._identity_files:
                         oauth_kwargs["identity_file"] = self._identity_files[event.target]

@@ -45,12 +45,15 @@ Git、scp 和 rsync 不再触发 remote-dev 服务。自动代理由 Release 制
 
 Release 制品提供 `tssh` 作为独立的 SSH 入口。它不替换普通 `ssh`，而是在启动原生 SSH 前
 向本地 Unix socket 申请 endpoint lease，并由 endpoint 级 forwarder 把控制端
-`127.0.0.1:4227` 暴露为目标机 loopback 的 `127.0.0.1:4227`。同一设备、不同用户或多个窗口
-共享一个 forwarder；最后一个 lease 释放后才清理隧道。
+`127.0.0.1:4227` 暴露为目标机 loopback 的 `127.0.0.1:4227`，并同时把目标机的
+`127.0.0.1:4228` Codex 事件通道转发到本机 `127.0.0.1:4230`。同一设备、不同用户或多个窗口
+共享一个 endpoint forwarder；最后一个 lease 释放后才清理隧道。
 
 `tssh user@host` 会调用 `ssh -G user@host` 读取 OpenSSH 最终配置，自动选择可用的
-`IdentityFile`；也可以用 `-i` 显式覆盖。密码不会保存，密码登录请使用原生 `ssh`。普通 SSH
-的 stdin/stdout 不经过编排器，因而不会被代理流量或 forwarder 重连阻塞。转发失败只影响
+`IdentityFile`；也可以用 `-i` 显式覆盖。密码不会保存，密码登录请使用原生 `ssh`。当远端已部署
+Codex shim 时，Codex 启动和 OAuth URL 事件会经 4228 到达本地编排器，由编排器临时建立
+1455 回调转发并在本机打开浏览器。普通 SSH 的 stdin/stdout 不经过编排器，因而不会被代理流量
+或 forwarder 重连阻塞。转发失败只影响
 `tssh` 的代理能力，不修改普通 SSH 的认证和连接路径。
 
 ## P2 Endpoint 注册协议

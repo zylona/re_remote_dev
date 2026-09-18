@@ -19,7 +19,8 @@ def unit_text(target: TargetKey, identity: Path) -> str:
         "-o", "BatchMode=yes", "-o", "ControlMaster=no", "-o", "ControlPath=none",
         "-o", "ExitOnForwardFailure=yes", "-o", "ServerAliveInterval=15",
         "-o", "ServerAliveCountMax=3", "-i", str(identity.expanduser()),
-        "-R", "127.0.0.1:4227:127.0.0.1:4227", "-p", str(target.port),
+        "-R", "127.0.0.1:4227:127.0.0.1:4227",
+        "-R", "127.0.0.1:4228:127.0.0.1:4230", "-p", str(target.port),
         f"{target.user}@{target.hostname}",
     ])
     return f"""[Unit]
