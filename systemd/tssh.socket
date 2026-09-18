@@ -1,8 +1,8 @@
 [Unit]
-Description=remote-dev local orchestrator socket
+Description=tssh local SSH orchestrator socket
 
 [Socket]
-ListenStream=%t/remote-dev/orchestrator.sock
+ListenStream=%t/tssh/orchestrator.sock
 SocketMode=0600
 DirectoryMode=0700
 RemoveOnStop=yes

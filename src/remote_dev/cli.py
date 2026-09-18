@@ -117,7 +117,7 @@ def _install_local_orchestrator(*, confirm: bool = True, restore_flow: bool = Tr
     """Install or refresh the local socket-activated user service."""
     heading = "阶段 1/2：本地编排器服务安装" if restore_flow else "本地编排器服务安装"
     console.print(f"[bold cyan]{heading}[/bold cyan]")
-    if confirm and not typer.confirm("是否安装或刷新本机 remote-dev user 服务？", default=True):
+    if confirm and not typer.confirm("是否安装或刷新本机 tssh user 服务？", default=True):
         suffix = "，远程恢复流程也未执行" if restore_flow else ""
         console.print(f"[yellow]已取消：本地服务未安装{suffix}。[/yellow]")
         raise typer.Exit(0)
@@ -139,25 +139,23 @@ def _install_local_orchestrator(*, confirm: bool = True, restore_flow: bool = Tr
 
     ssh_config = install_ssh()
     console.print(f"[green]已清理旧版全局 SSH hook：{ssh_config}；VS Code 使用普通 SSH 配置[/green]")
-    service = service_dir / "remote-dev-orchestrator.service"
-    service_content = (project_root / "systemd/remote-dev-orchestrator.service").read_text(encoding="utf-8")
-    service_content = service_content.replace(
-        "ExecStart=remote-dev orchestrator-server",
-        f"ExecStart={executable} orchestrator-server",
-    )
+    service = service_dir / "tssh.service"
+    service_content = (project_root / "systemd/tssh.service").read_text(encoding="utf-8")
+    service_content = service_content.replace("ExecStart=tssh-server", f"ExecStart={executable} orchestrator-server")
     service_changed = not service.exists() or service.read_text(encoding="utf-8") != service_content
     service.write_text(service_content, encoding="utf-8")
     service.chmod(0o600)
-    socket_unit = service_dir / "remote-dev-orchestrator.socket"
-    socket_content = (project_root / "systemd/remote-dev-orchestrator.socket").read_text(encoding="utf-8")
+    socket_unit = service_dir / "tssh.socket"
+    socket_content = (project_root / "systemd/tssh.socket").read_text(encoding="utf-8")
     socket_changed = not socket_unit.exists() or socket_unit.read_text(encoding="utf-8") != socket_content
     socket_unit.write_text(socket_content, encoding="utf-8")
     socket_unit.chmod(0o600)
     subprocess.run(["systemctl", "--user", "daemon-reload"], check=True)
-    subprocess.run(["systemctl", "--user", "enable", "--now", "remote-dev-orchestrator.socket"], check=True)
-    service_active = subprocess.run(["systemctl", "--user", "is-active", "--quiet", "remote-dev-orchestrator.service"], check=False).returncode == 0
+    subprocess.run(["systemctl", "--user", "disable", "--now", "remote-dev-orchestrator.socket", "remote-dev-orchestrator.service"], check=False)
+    subprocess.run(["systemctl", "--user", "enable", "--now", "tssh.socket"], check=True)
+    service_active = subprocess.run(["systemctl", "--user", "is-active", "--quiet", "tssh.service"], check=False).returncode == 0
     if service_changed or socket_changed or service_active:
-        subprocess.run(["systemctl", "--user", "restart", "remote-dev-orchestrator.service"], check=True)
+        subprocess.run(["systemctl", "--user", "restart", "tssh.service"], check=True)
         console.print("[cyan]本地编排器预检：已刷新服务进程，加载当前实现[/cyan]")
     else:
         console.print("[cyan]本地编排器预检：服务尚未运行，将由 socket activation 启动[/cyan]")

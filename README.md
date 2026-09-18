@@ -7,7 +7,7 @@
 
 用一次受控运行，把一台可 SSH 登录的 Linux 主机恢复成现代远程开发环境：zsh、Antidote、Powerlevel10k、mise、fzf、zoxide、Zellij、Neovim 和 Codex CLI。项目采用 Ansible-first 设计，支持无外网目标机的临时 HTTP 代理，并保持普通 `ssh user@host` 的原生连接体验。
 
-> 当前发布版本：`v0.1.14`。已在 Debian 13、Arch/Omarchy 和 openEuler 24.03 上完成真实回归，包含多窗口、多用户共享隧道、断线恢复和 30 分钟连续观察。默认不安装远端常驻 Agent、不开放公网端口、不保存密码或 API Token。
+> 当前发布版本：`v0.1.16`。已在 Debian 13、Arch/Omarchy 和 openEuler 24.03 上完成真实回归，包含多窗口、多用户共享隧道、断线恢复和 30 分钟连续观察。默认不安装远端常驻 Agent、不开放公网端口、不保存密码或 API Token。
 
 ## 特性
 
@@ -107,7 +107,7 @@ all:
 ```bash
 ./install-local-service --yes
 ./re-remote orchestrator doctor
-systemctl --user status remote-dev-orchestrator.socket
+systemctl --user status tssh.socket
 ```
 
 完整 Release 制品的安装器会安装编排器和迁移工具，并清理旧版全局 SSH hook。P1 起普通
@@ -144,14 +144,14 @@ Codex 登录要求本机 `127.0.0.1:1455` 空闲，因为 OpenAI OAuth 的回调
 代理功能优先使用 SSH 密钥或 ssh-agent 认证；同一设备的多用户和多窗口共享一个 endpoint
 隧道，不会重复占用远端 4227。纯密码认证保持原生 SSH 路径，不参与无人值守自动接管。
 
-也可以从 [v0.1.15 Release](https://github.com/zylona/re_remote_dev/releases/tag/v0.1.15) 下载完整本地集成制品。生产环境建议固定版本并校验 SHA256：
+也可以从 [v0.1.16 Release](https://github.com/zylona/re_remote_dev/releases/tag/v0.1.16) 下载完整本地集成制品。生产环境建议固定版本并校验 SHA256：
 
 ```bash
-curl -fLO https://github.com/zylona/re_remote_dev/releases/download/v0.1.15/remote-dev-orchestrator-v0.1.15-linux.tar.gz
-curl -fLO https://github.com/zylona/re_remote_dev/releases/download/v0.1.15/remote-dev-orchestrator-v0.1.15-linux.tar.gz.sha256
-sha256sum -c remote-dev-orchestrator-v0.1.15-linux.tar.gz.sha256
-tar -xzf remote-dev-orchestrator-v0.1.15-linux.tar.gz
-./remote-dev-orchestrator-v0.1.15-linux/install
+curl -fLO https://github.com/zylona/re_remote_dev/releases/download/v0.1.16/remote-dev-orchestrator-v0.1.16-linux.tar.gz
+curl -fLO https://github.com/zylona/re_remote_dev/releases/download/v0.1.16/remote-dev-orchestrator-v0.1.16-linux.tar.gz.sha256
+sha256sum -c remote-dev-orchestrator-v0.1.16-linux.tar.gz.sha256
+tar -xzf remote-dev-orchestrator-v0.1.16-linux.tar.gz
+./remote-dev-orchestrator-v0.1.16-linux/install
 ```
 
 安装器会迁移并备份旧版 `# >>> remote-dev ssh integration >>>` 标记区块，但默认不再写入全局
@@ -161,7 +161,7 @@ tar -xzf remote-dev-orchestrator-v0.1.15-linux.tar.gz
 已安装版本可以使用制品内的 `rollback VERSION` 回滚：
 
 ```bash
-./remote-dev-orchestrator-v0.1.14-linux/rollback 0.1.10
+./remote-dev-orchestrator-v0.1.16-linux/rollback 0.1.10
 ```
 
 VS Code Remote‑SSH 默认直接使用普通的 `~/.ssh/config`。安装器不会生成或维护

@@ -15,12 +15,12 @@ cp "$root_dir/scripts/remote_dev_ssh_hook.py" "$stage_dir/$pkg/bin/remote-dev-ss
 find "$stage_dir/$pkg" -type d -name '__pycache__' -prune -exec rm -rf {} +
 find "$stage_dir/$pkg" -type f -name '*.pyc' -delete
 cp "$root_dir/release/install" "$root_dir/release/uninstall" "$root_dir/release/rollback" "$stage_dir/$pkg/"
-cp "$root_dir/systemd/remote-dev-orchestrator.service" "$root_dir/systemd/remote-dev-orchestrator.socket" "$stage_dir/$pkg/"
+cp "$root_dir/systemd/tssh.service" "$root_dir/systemd/tssh.socket" "$stage_dir/$pkg/"
 cp "$root_dir/LICENSE" "$stage_dir/$pkg/LICENSE"
 cat > "$stage_dir/$pkg/VERSION" <<EOF
 $version
 EOF
-cat > "$stage_dir/$pkg/bin/remote-dev-orchestrator-server" <<'EOF'
+cat > "$stage_dir/$pkg/bin/tssh-server" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
 script_path="${BASH_SOURCE[0]}"
@@ -36,6 +36,7 @@ base_dir="$(cd "$(dirname "$script_path")/.." && pwd)"
 export PYTHONPATH="$base_dir/lib${PYTHONPATH:+:$PYTHONPATH}"
 exec "${PYTHON:-python3}" -m remote_dev.orchestrator "$@"
 EOF
+ln -s tssh-server "$stage_dir/$pkg/bin/remote-dev-orchestrator-server"
 cat > "$stage_dir/$pkg/bin/tssh" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -48,7 +49,7 @@ base_dir="$(cd "$(dirname "$script_path")/.." && pwd)"
 export PYTHONPATH="$base_dir/lib${PYTHONPATH:+:$PYTHONPATH}"
 exec "${PYTHON:-python3}" -m remote_dev.tssh "$@"
 EOF
-chmod 0755 "$stage_dir/$pkg/bin/remote-dev-orchestrator-server" "$stage_dir/$pkg/bin/remote-dev-ssh-hook" "$stage_dir/$pkg/bin/tssh" "$stage_dir/$pkg/install" "$stage_dir/$pkg/uninstall" "$stage_dir/$pkg/rollback"
+chmod 0755 "$stage_dir/$pkg/bin/tssh-server" "$stage_dir/$pkg/bin/remote-dev-ssh-hook" "$stage_dir/$pkg/bin/tssh" "$stage_dir/$pkg/install" "$stage_dir/$pkg/uninstall" "$stage_dir/$pkg/rollback"
 tar_args=(--sort=name --owner=0 --group=0 --numeric-owner -czf "$dist_dir/$pkg.tar.gz" -C "$stage_dir" "$pkg")
 if [[ -n "${SOURCE_DATE_EPOCH:-}" ]]; then tar_args+=(--mtime="@$SOURCE_DATE_EPOCH"); fi
 tar "${tar_args[@]}"

@@ -17,7 +17,7 @@ def unit_name(target: TargetKey) -> str:
 def unit_text(target: TargetKey, identity: Path) -> str:
     executable = shutil.which("remote-dev") or "remote-dev"
     command = shlex.join([executable, "orchestrator", "connect", target.hostname, target.user, "--identity", str(identity.expanduser()), "--port", str(target.port), "--persistent"])
-    return """[Unit]\nDescription=remote-dev managed SSH session (%s)\nAfter=network-online.target remote-dev-orchestrator.service\nPartOf=remote-dev-orchestrator.service\nStartLimitIntervalSec=600\nStartLimitBurst=10\n\n[Service]\nType=simple\nExecStart=%s\nRestart=on-failure\nRestartSec=30\n\n[Install]\nWantedBy=default.target\n""" % (target.digest, command)
+    return """[Unit]\nDescription=remote-dev managed SSH session (%s)\nAfter=network-online.target tssh.service\nPartOf=tssh.service\nStartLimitIntervalSec=600\nStartLimitBurst=10\n\n[Service]\nType=simple\nExecStart=%s\nRestart=on-failure\nRestartSec=30\n\n[Install]\nWantedBy=default.target\n""" % (target.digest, command)
 
 
 def install(target: TargetKey, identity: Path, *, systemd_dir: Path | None = None) -> Path:

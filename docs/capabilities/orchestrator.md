@@ -25,8 +25,8 @@ endpoint 锁保证并发登录不会重复绑定远端 4227。交互 SSH 使用 
 TTY 让用户输入一次 SSH 密码建立临时隧道，但密码隧道断线后不能无人值守重连。
 
 用户可通过 `./install-local-service`（等价于 `./re-remote local-service-install`）独立安装或刷新
-本地编排器，不触发任何远端恢复。安装器复用 `setup/bootstrap` 的同一实现，将受控 unit 写入
-`~/.config/systemd/user/`，启用 `remote-dev-orchestrator.socket`，刷新服务进程并通过 Unix socket
+本地编排器，不触发任何远端恢复。安装器复用 `setup/bootstrap` 的同一实现，将 `tssh.service` 和
+`tssh.socket` 写入 `~/.config/systemd/user/`，刷新服务进程并通过 `$XDG_RUNTIME_DIR/tssh/orchestrator.sock`
 执行健康检查。重复执行会加载当前仓库实现，不创建第二套服务。
 
 服务始终以当前用户身份运行，不请求 root，不监听公网。systemd user manager 存续期间，socket

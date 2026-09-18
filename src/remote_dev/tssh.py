@@ -21,8 +21,8 @@ def _version() -> str:
 
 
 def _socket_path() -> Path:
-    runtime = os.environ.get("XDG_RUNTIME_DIR", f"/tmp/remote-dev-{os.getuid()}")
-    return Path(runtime) / "remote-dev" / "orchestrator.sock"
+    runtime = os.environ.get("XDG_RUNTIME_DIR", f"/tmp/tssh-{os.getuid()}")
+    return Path(runtime) / "tssh" / "orchestrator.sock"
 
 
 def _request(payload: dict[str, Any], timeout: float) -> dict[str, Any]:

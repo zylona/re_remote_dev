@@ -12,8 +12,8 @@ MAX_REQUEST_BYTES = 8 * 1024
 
 
 def socket_path() -> Path:
-    runtime = os.environ.get("XDG_RUNTIME_DIR", f"/tmp/remote-dev-{os.getuid()}")
-    return Path(runtime) / "remote-dev" / "orchestrator.sock"
+    runtime = os.environ.get("XDG_RUNTIME_DIR", f"/tmp/tssh-{os.getuid()}")
+    return Path(runtime) / "tssh" / "orchestrator.sock"
 
 
 def request(payload: dict[str, Any], *, timeout: float = 2.0) -> dict[str, Any]:
