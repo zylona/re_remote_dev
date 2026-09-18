@@ -1,6 +1,6 @@
 # 本地编排器发布
 
-`remote-dev-orchestrator` 是可被其他项目复用的完整本地 SSH 集成制品。它包含用户级 socket 服务、SSH hook、幂等 SSH 配置安装器和标准库 Python 实现，不携带目标机恢复逻辑，也不要求安装本项目的 Ansible 依赖。
+`remote-dev-orchestrator` 是可被其他项目复用的完整本地 SSH 集成制品。它包含用户级 socket 服务、`tssh` 转发入口、迁移/回滚脚本和标准库 Python 实现，不携带目标机恢复逻辑，也不要求安装本项目的 Ansible 依赖。
 
 ## 发布
 
@@ -16,7 +16,7 @@ https://github.com/zylona/re_remote_dev/releases/latest/download/remote-dev-orch
 
 生产环境应固定具体版本 Tag，并同时下载 `.sha256` 校验文件，不要依赖 `latest`。
 
-发布前必须在至少一个 VM 和一个真实设备上完成多窗口 SSH、ControlMaster 自动恢复、4227/4228 转发以及 Ctrl-C 清理；只看到 systemd `active` 不足以判定稳定。若 `NRestarts` 持续增加，应先修复隧道/主机密钥问题，不要打 tag。
+发布前必须在目标 VM `192.168.122.196` 上完成多窗口 SSH、ControlMaster 自动恢复、4227/4228 转发、VS Code Remote-SSH 打开远程目录以及 Ctrl-C 清理；只看到 systemd `active` 不足以判定稳定。若 `NRestarts` 持续增加，应先修复隧道/主机密钥问题，不要打 tag。
 
 ```sh
 git tag v0.1.0
@@ -33,13 +33,20 @@ tar -xzf remote-dev-orchestrator-v0.1.0-linux.tar.gz
 ./remote-dev-orchestrator-v0.1.0-linux/install
 ```
 
-安装器将版本放入 `~/.local/share/remote-dev-orchestrator/versions/`，原子更新 `current` 链接，写入 `~/.config/systemd/user`，安装 hook 到 `~/.local/bin`，并将受管规则幂等合并到 `~/.ssh/config`。规则使用 `# >>> remote-dev ssh integration >>>` / `# <<< remote-dev ssh integration <<<` 标记；重复安装会先替换旧标记块，不会追加重复配置，也会迁移旧版外部 Include。升级重复执行即可；卸载执行包内 `uninstall`，仅移除受管区块和 hook。服务以当前用户运行，SSH 密钥、目标配置和密码不会进入制品。
+安装器将版本放入 `~/.local/share/remote-dev-orchestrator/versions/`，先写入暂存目录，再原子更新 `current` 链接；旧版本目录保留用于回滚。安装时会迁移旧版全局 SSH hook 和旧版 `remote-dev-master-*` unit，不触碰无关 user unit。P1 起默认不向 `~/.ssh/config` 写入新的 `LocalCommand` 或项目 forwarding 规则；普通 SSH 保持原生，显式 `remote-dev connect` resolver 入口将在后续阶段实现。VS Code Remote‑SSH 直接使用普通 `~/.ssh/config`。重复安装不会追加规则，也会迁移旧版外部 Include。升级中断时旧 `current` 仍可用；可执行包内 `rollback VERSION` 回滚到已安装版本。卸载执行包内 `uninstall`，仅移除受管 unit、区块和旧版受管快照。服务以当前用户运行，SSH 密钥、目标配置和密码不会进入制品。
+
+回滚到已安装版本：
+
+```sh
+./remote-dev-orchestrator-v0.1.0-linux/rollback 0.1.0
+```
 
 安装后验证：
 
 ```sh
 systemctl --user is-active remote-dev-orchestrator.socket
 remote-dev-orchestrator-server --help # 仅检查入口；服务由 systemd 启动
+tssh --help # 带 4227 转发的 SSH 入口
 ```
 
-首次使用本项目时，`./re-remote bootstrap` 仍负责目标机恢复和注册；已安装的独立服务可供其他项目直接复用同一 Unix socket 与 ControlMaster 生命周期。
+首次使用本项目时，`./re-remote bootstrap` 仍负责目标机恢复和注册；已安装的独立服务可供其他项目直接复用同一 Unix socket 与 ControlMaster 生命周期。VS Code Remote-SSH 默认使用普通 `~/.ssh/config`；安装器不会生成或维护 `config-vscode`，也不会向普通配置注入 remote-dev hook、4227 或 1455 转发。

@@ -11,23 +11,33 @@ import selectors
 import webbrowser
 import shutil
 import subprocess
+import time
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
-from .model import ForwardState, ForwardStatus, MasterState, OAuthState, TargetKey, TargetStatus
+from .model import EndpointKey, ForwardState, ForwardStatus, MasterState, OAuthState, TargetKey, TargetStatus
 from .protocol import ProtocolError, decode_event
 from .oauth import OAuthError, OAuthManager
+from .endpoint_forward import EndpointForwardManager
+from .health import classify_failure, retry_delay
 
 MAX_REQUEST_BYTES = 8 * 1024
 
 
 class OrchestratorServer:
-    def __init__(self, listener: socket.socket, path: Path | None = None, *, extra_listeners: list[socket.socket] | None = None) -> None:
+    def __init__(self, listener: socket.socket, path: Path | None = None, *, extra_listeners: list[socket.socket] | None = None, endpoint_forwarder: EndpointForwardManager | None = None) -> None:
         self.listener = listener
         self.listeners = [listener, *(extra_listeners or [])]
         self.path = path
         self.targets: dict[str, TargetStatus] = {}
+        # P2 endpoint leases are intentionally in-memory.  P3 adds the
+        # forwarder/owner lifecycle; P2 only guarantees registration and
+        # idempotent acquire/release semantics.
+        self.endpoints: dict[str, dict[str, Any]] = {}
+        self.sessions: dict[str, dict[str, Any]] = {}
+        self.lease_ttl = 120.0
+        self.endpoint_forwarder = endpoint_forwarder or EndpointForwardManager()
         self._identity_files: dict[str, Path] = {}
         # A TUI redraw may yield the same authorize URL through both the
         # normal and wrapped-url matchers.  Deduplicate browser launches per
@@ -67,16 +77,31 @@ class OrchestratorServer:
         )
 
     def handle(self, payload: dict[str, Any]) -> dict[str, Any]:
+        self._expire_sessions()
+        self._reconcile_endpoints()
         if "event" in payload:
             return self.handle_event(payload)
         op = payload.get("op")
         if op == "health":
             return {"ok": True, "pid": os.getpid(), "version": 1}
         if op == "status":
-            return {"ok": True, "targets": [self._status_dict(item) for item in self.targets.values()]}
+            endpoints = []
+            now = time.monotonic()
+            for record in self.endpoints.values():
+                summary = {key: value for key, value in record.items() if key != "next_retry"}
+                if "next_retry" in record:
+                    summary["retry_in"] = round(max(0.0, float(record["next_retry"]) - now), 1)
+                endpoints.append(summary)
+            return {
+                "ok": True,
+                "targets": [self._status_dict(item) for item in self.targets.values()],
+                "endpoints": endpoints,
+            }
         if op == "shutdown":
             self.running = False
             return {"ok": True}
+        if op in {"acquire", "release", "heartbeat"}:
+            return self._handle_lease(op, payload)
         if op in {"register", "unregister"}:
             target_data = payload.get("target")
             if not isinstance(target_data, dict):
@@ -111,6 +136,151 @@ class OrchestratorServer:
                 self._identity_files.pop(target.digest, None)
             return {"ok": True, "digest": target.digest}
         return {"ok": False, "error": f"不支持的操作：{op}"}
+
+    @staticmethod
+    def _parse_endpoint(payload: dict[str, Any]) -> EndpointKey:
+        value = payload.get("endpoint")
+        if not isinstance(value, dict):
+            raise ValueError("endpoint 必须是 object")
+        hostname = value.get("hostname", value.get("host"))
+        if not isinstance(hostname, str) or not hostname or len(hostname) > 253:
+            raise ValueError("endpoint.hostname 无效")
+        port = value.get("port", 22)
+        if isinstance(port, bool):
+            raise ValueError("endpoint.port 无效")
+        return EndpointKey(hostname, int(port))
+
+    @staticmethod
+    def _parse_candidate(payload: dict[str, Any]) -> tuple[str, str]:
+        value = payload.get("candidate")
+        if not isinstance(value, dict):
+            raise ValueError("candidate 必须是 object")
+        user = value.get("user")
+        fingerprint = value.get("identity_fingerprint", "")
+        if not isinstance(user, str) or not user or len(user) > 128:
+            raise ValueError("candidate.user 无效")
+        if not isinstance(fingerprint, str) or len(fingerprint) > 256:
+            raise ValueError("candidate.identity_fingerprint 无效")
+        return user, fingerprint
+
+    def _handle_lease(self, op: str, payload: dict[str, Any]) -> dict[str, Any]:
+        try:
+            endpoint = self._parse_endpoint(payload)
+            session_id = payload.get("session_id")
+            if not isinstance(session_id, str) or not session_id or len(session_id) > 128:
+                raise ValueError("session_id 无效")
+            digest = endpoint.digest
+            if op == "acquire":
+                user, fingerprint = self._parse_candidate(payload)
+                previous = self.sessions.get(session_id)
+                if previous is not None:
+                    if previous["endpoint_digest"] != digest:
+                        return {"ok": False, "error": "SESSION_CONFLICT"}
+                    record = self.endpoints[digest]
+                    previous["last_seen"] = time.monotonic()
+                    return {"ok": True, "endpoint_digest": digest, "state": record["state"], "owner": record["owner"], "session_count": record["session_count"], "reused": True}
+                record = self.endpoints.setdefault(
+                    digest,
+                    {"endpoint": {"hostname": endpoint.hostname, "port": endpoint.port}, "endpoint_digest": digest, "state": "STARTING", "owner": None, "session_count": 0},
+                )
+                if record["owner"] is None:
+                    record["owner"] = user
+                record["session_count"] += 1
+                identity_file = payload.get("candidate", {}).get("identity_file")
+                session: dict[str, Any] = {"endpoint_digest": digest, "user": user, "identity_fingerprint": fingerprint, "last_seen": time.monotonic()}
+                if isinstance(identity_file, str) and identity_file:
+                    session["identity_file"] = identity_file
+                self.sessions[session_id] = session
+                if record["session_count"] == 1 and isinstance(identity_file, str) and identity_file:
+                    try:
+                        self.endpoint_forwarder.start(endpoint, user, Path(identity_file).expanduser())
+                        record["state"] = "READY"
+                    except (OSError, RuntimeError, ValueError, subprocess.SubprocessError) as exc:
+                        self._mark_forward_failure(record, exc)
+                return {"ok": True, "endpoint_digest": digest, "state": record["state"], "owner": record["owner"], "session_count": record["session_count"], "reused": record["session_count"] > 1}
+            previous = self.sessions.get(session_id)
+            if previous is None:
+                return {"ok": True, "released": False}
+            if previous["endpoint_digest"] != endpoint.digest:
+                return {"ok": False, "error": "SESSION_CONFLICT"}
+            if op == "heartbeat":
+                previous["last_seen"] = time.monotonic()
+                record = self.endpoints.get(previous["endpoint_digest"])
+                return {"ok": True, "endpoint_digest": previous["endpoint_digest"], "session_count": record["session_count"] if record else 0}
+            self.sessions.pop(session_id, None)
+            record = self.endpoints.get(previous["endpoint_digest"])
+            if record is None:
+                return {"ok": True, "released": True}
+            record["session_count"] = max(0, int(record["session_count"]) - 1)
+            if record["session_count"] == 0:
+                try:
+                    self.endpoint_forwarder.stop(endpoint, previous.get("user"))
+                except (OSError, RuntimeError, ValueError, subprocess.SubprocessError):
+                    pass
+                self.endpoints.pop(previous["endpoint_digest"], None)
+                return {"ok": True, "released": True, "endpoint_digest": previous["endpoint_digest"], "session_count": 0}
+            if previous.get("user") == record.get("owner"):
+                candidates = [item for item in self.sessions.values() if item["endpoint_digest"] == previous["endpoint_digest"]]
+                candidates.sort(key=lambda item: item["user"])
+                replacement = candidates[0]
+                record["owner"] = replacement["user"]
+                if replacement.get("identity_file"):
+                    try:
+                        self.endpoint_forwarder.start(endpoint, replacement["user"], Path(replacement["identity_file"]).expanduser())
+                        record["state"] = "READY"
+                    except (OSError, RuntimeError, ValueError, subprocess.SubprocessError) as exc:
+                        self._mark_forward_failure(record, exc)
+            return {"ok": True, "released": True, "endpoint_digest": previous["endpoint_digest"], "owner": record["owner"], "session_count": record["session_count"]}
+        except (TypeError, ValueError, KeyError) as exc:
+            return {"ok": False, "error": "PROTOCOL_INVALID", "detail": str(exc)}
+
+    def _expire_sessions(self) -> None:
+        """Release leases that stopped heartbeating without trusting process exit."""
+        now = time.monotonic()
+        for session_id, session in list(self.sessions.items()):
+            if now - float(session.get("last_seen", now)) <= self.lease_ttl:
+                continue
+            endpoint = self.endpoints.get(session["endpoint_digest"], {}).get("endpoint")
+            if isinstance(endpoint, dict):
+                self._handle_lease("release", {"endpoint": endpoint, "session_id": session_id})
+
+    @staticmethod
+    def _mark_forward_failure(record: dict[str, Any], exc: Exception) -> None:
+        failures = int(record.get("failure_count", 0)) + 1
+        record["state"] = "DEGRADED"
+        record["failure_count"] = failures
+        record["last_error"] = classify_failure(str(exc))
+        record["next_retry"] = time.monotonic() + retry_delay(failures)
+
+    def _reconcile_endpoints(self) -> None:
+        """Retry degraded endpoint owners using bounded exponential backoff."""
+        now = time.monotonic()
+        for digest, record in list(self.endpoints.items()):
+            if record.get("state") == "READY" or int(record.get("session_count", 0)) <= 0:
+                continue
+            if now < float(record.get("next_retry", 0)):
+                continue
+            candidates = [item for item in self.sessions.values() if item["endpoint_digest"] == digest and item.get("identity_file")]
+            if not candidates:
+                continue
+            candidates.sort(key=lambda item: item["user"])
+            owner = candidates[0]
+            endpoint_data = record.get("endpoint")
+            if not isinstance(endpoint_data, dict):
+                continue
+            try:
+                self.endpoint_forwarder.start(
+                    EndpointKey(str(endpoint_data["hostname"]), int(endpoint_data["port"])),
+                    owner["user"],
+                    Path(str(owner["identity_file"])).expanduser(),
+                )
+                record["owner"] = owner["user"]
+                record["state"] = "READY"
+                record["failure_count"] = 0
+                record.pop("last_error", None)
+                record.pop("next_retry", None)
+            except (OSError, RuntimeError, ValueError, subprocess.SubprocessError) as exc:
+                self._mark_forward_failure(record, exc)
 
     def handle_event(self, payload: dict[str, Any]) -> dict[str, Any]:
         """接收远端 shim 的非阻塞生命周期事件。"""
@@ -195,6 +365,9 @@ class OrchestratorServer:
             listener.setblocking(False)
             selector.register(listener, selectors.EVENT_READ)
         while self.running:
+            # Expire abandoned leases even when no client is polling status.
+            self._expire_sessions()
+            self._reconcile_endpoints()
             for key, _ in selector.select(timeout=0.5):
                 try:
                     conn, _ = key.fileobj.accept()

@@ -2,10 +2,12 @@ import json
 import os
 import socket
 import threading
+import time
 
 import pytest
 
 from remote_dev.orchestrator import (
+    EndpointKey,
     Event,
     MasterState,
     ProtocolError,
@@ -65,6 +67,100 @@ def test_model_enums_are_stable():
         TargetKey("", 22, "user")
     with pytest.raises(ValueError):
         TargetKey("host", 0, "user")
+    assert EndpointKey("host", 22).digest == EndpointKey("host", 22).digest
+    assert EndpointKey("host", 22).digest != EndpointKey("other", 22).digest
+
+
+def test_endpoint_acquire_is_idempotent_and_release_keeps_other_session():
+    listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    server = OrchestratorServer(listener, None)
+    endpoint = {"hostname": "host", "port": 22}
+    first = server.handle({"op": "acquire", "endpoint": endpoint, "candidate": {"user": "a", "identity_fingerprint": "key-a"}, "session_id": "s1"})
+    again = server.handle({"op": "acquire", "endpoint": endpoint, "candidate": {"user": "a", "identity_fingerprint": "key-a"}, "session_id": "s1"})
+    second = server.handle({"op": "acquire", "endpoint": endpoint, "candidate": {"user": "b", "identity_fingerprint": "key-b"}, "session_id": "s2"})
+    assert first["ok"] and first["reused"] is False
+    assert again["reused"] is True and again["session_count"] == 1
+    assert second["reused"] is True and second["owner"] == "a"
+    released = server.handle({"op": "release", "endpoint": endpoint, "session_id": "s1"})
+    assert released["session_count"] == 1
+    assert server.handle({"op": "release", "endpoint": endpoint, "session_id": "s2"})["released"] is True
+    assert server.handle({"op": "status"})["endpoints"] == []
+    listener.close()
+
+
+def test_endpoint_owner_forwarder_is_started_once_and_reassigned(monkeypatch, tmp_path):
+    class FakeForwarder:
+        def __init__(self):
+            self.started = []
+            self.stopped = []
+        def start(self, endpoint, user, identity):
+            self.started.append((endpoint, user, identity))
+        def stop(self, endpoint, user=None):
+            self.stopped.append((endpoint, user))
+
+    listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    forwarder = FakeForwarder()
+    server = OrchestratorServer(listener, None, endpoint_forwarder=forwarder)
+    endpoint = {"hostname": "host", "port": 22}
+    server.handle({"op": "acquire", "endpoint": endpoint, "candidate": {"user": "b", "identity_file": str(tmp_path / "b")}, "session_id": "s1"})
+    server.handle({"op": "acquire", "endpoint": endpoint, "candidate": {"user": "a", "identity_file": str(tmp_path / "a")}, "session_id": "s2"})
+    assert len(forwarder.started) == 1
+    server.handle({"op": "release", "endpoint": endpoint, "session_id": "s1"})
+    assert len(forwarder.started) == 2
+    assert forwarder.started[-1][1] == "a"
+    server.handle({"op": "release", "endpoint": endpoint, "session_id": "s2"})
+    assert forwarder.stopped
+    listener.close()
+
+
+def test_degraded_endpoint_retries_with_bounded_backoff(tmp_path):
+    class FlakyForwarder:
+        def __init__(self):
+            self.calls = 0
+        def start(self, endpoint, user, identity):
+            self.calls += 1
+            if self.calls == 1:
+                raise RuntimeError("connection timed out")
+        def stop(self, endpoint, user=None):
+            pass
+
+    listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    forwarder = FlakyForwarder()
+    server = OrchestratorServer(listener, None, endpoint_forwarder=forwarder)
+    endpoint = {"hostname": "host", "port": 22}
+    first = server.handle({"op": "acquire", "endpoint": endpoint, "candidate": {"user": "u", "identity_file": str(tmp_path / "id")}, "session_id": "s1"})
+    assert first["state"] == "DEGRADED"
+    record = server.endpoints[first["endpoint_digest"]]
+    assert record["last_error"] == "REMOTE_UNREACHABLE"
+    record["next_retry"] = 0
+    server.handle({"op": "status"})
+    assert server.endpoints[first["endpoint_digest"]]["state"] == "READY"
+    assert server.endpoints[first["endpoint_digest"]]["failure_count"] == 0
+    listener.close()
+
+
+def test_endpoint_session_cannot_move_between_endpoints():
+    listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    server = OrchestratorServer(listener, None)
+    server.handle({"op": "acquire", "endpoint": {"hostname": "a"}, "candidate": {"user": "u"}, "session_id": "s"})
+    result = server.handle({"op": "acquire", "endpoint": {"hostname": "b"}, "candidate": {"user": "u"}, "session_id": "s"})
+    assert result == {"ok": False, "error": "SESSION_CONFLICT"}
+    listener.close()
+
+
+def test_heartbeat_refreshes_lease_and_ttl_releases_orphan():
+    listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    server = OrchestratorServer(listener, None)
+    server.lease_ttl = 0.01
+    endpoint = {"hostname": "host", "port": 22}
+    acquired = server.handle({"op": "acquire", "endpoint": endpoint, "candidate": {"user": "u"}, "session_id": "live"})
+    assert acquired["ok"]
+    time.sleep(0.005)
+    heartbeat = server.handle({"op": "heartbeat", "endpoint": endpoint, "session_id": "live"})
+    assert heartbeat == {"ok": True, "endpoint_digest": acquired["endpoint_digest"], "session_count": 1}
+    time.sleep(0.02)
+    assert server.handle({"op": "status"})["endpoints"] == []
+    listener.close()
 
 
 def test_heartbeat_registration_preserves_live_state():

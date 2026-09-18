@@ -5,9 +5,9 @@
 [![License](https://img.shields.io/github/license/zylona/re_remote_dev)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Linux-333?logo=linux)](#支持范围)
 
-用一次受控运行，把一台可 SSH 登录的 Linux 主机恢复成现代远程开发环境：zsh、Antidote、Powerlevel10k、mise、fzf、zoxide、Zellij、Neovim 和 Codex CLI。项目采用 Ansible-first 设计，支持无外网目标机的临时 HTTP 代理，并保持普通 `ssh user@host` 的使用习惯。
+用一次受控运行，把一台可 SSH 登录的 Linux 主机恢复成现代远程开发环境：zsh、Antidote、Powerlevel10k、mise、fzf、zoxide、Zellij、Neovim 和 Codex CLI。项目采用 Ansible-first 设计，支持无外网目标机的临时 HTTP 代理，并保持普通 `ssh user@host` 的原生连接体验。
 
-> 当前发布版本：`v0.1.9`。已在 Debian 13、Arch/Omarchy 和 openEuler 24.03 上完成真实回归，包含多窗口、多用户共享隧道、断线恢复和 30 分钟连续观察。默认不安装远端常驻 Agent、不开放公网端口、不保存密码或 API Token。
+> 当前发布版本：`v0.1.11`。已在 Debian 13、Arch/Omarchy 和 openEuler 24.03 上完成真实回归，包含多窗口、多用户共享隧道、断线恢复和 30 分钟连续观察。默认不安装远端常驻 Agent、不开放公网端口、不保存密码或 API Token。
 
 ## 特性
 
@@ -110,31 +110,56 @@ all:
 systemctl --user status remote-dev-orchestrator.socket
 ```
 
-完整 Release 制品的安装器会同时安装编排器、SSH hook，并将受管规则幂等合并到现有
-`~/.ssh/config`。安装后普通 `ssh user@ip` 会自动为该目标启动独立的 4227 反向隧道，
-无需再手动执行后台 SSH 命令：
+完整 Release 制品的安装器会安装编排器和迁移工具，并清理旧版全局 SSH hook。P1 起普通
+`ssh user@ip` 保持原生连接；需要代理转发时使用显式 resolver，它申请会话 lease 后再启动
+原生 SSH：
 
 ```bash
-ssh user@host
+./re-remote connect user@host -i ~/.ssh/id_ed25519
 ```
 
-该功能优先使用 SSH 密钥或 ssh-agent 认证；同一设备的多用户和多窗口共享一个 systemd user
-unit，不会重复占用远端 4227。纯密码认证会保持原生 SSH 路径，不启动自动代理隧道；如需代理，
-请改用 SSH 密钥或 ssh-agent。这样不会出现 hook 额外弹出密码提示，也不会保存密码。
+连接期间每 30 秒自动续租，退出或异常断线后由编排器释放 lease；同一 endpoint 的多用户、多
+窗口共享 4227 隧道，最后一个会话退出后才清理转发。纯密码登录仍建议直接使用普通 SSH，因
+为密码不会被保存，无法支持无人值守接管。
 
-也可以从 [v0.1.10 Release](https://github.com/zylona/re_remote_dev/releases/tag/v0.1.10) 下载完整本地集成制品。生产环境建议固定版本并校验 SHA256：
+Release 制品安装后会额外提供 `tssh` 命令：
 
 ```bash
-curl -fLO https://github.com/zylona/re_remote_dev/releases/download/v0.1.10/remote-dev-orchestrator-v0.1.10-linux.tar.gz
-curl -fLO https://github.com/zylona/re_remote_dev/releases/download/v0.1.10/remote-dev-orchestrator-v0.1.10-linux.tar.gz.sha256
+tssh user@host
+tssh user@host -i ~/.ssh/id_ed25519
+```
+
+`tssh` 与普通 `ssh` 使用相同的终端体验，但会先申请项目 Lease，并自动建立或复用远端
+`127.0.0.1:4227` 转发。`-i`/`-p` 可放在目标前后；复杂 SSH 参数建议先写入普通
+`~/.ssh/config`，再使用 `tssh user@host`。`tssh` 依赖 SSH 密钥或 ssh-agent；密码登录请
+继续使用普通 `ssh`。
+
+代理功能优先使用 SSH 密钥或 ssh-agent 认证；同一设备的多用户和多窗口共享一个 endpoint
+隧道，不会重复占用远端 4227。纯密码认证保持原生 SSH 路径，不参与无人值守自动接管。
+
+也可以从 [v0.1.11 Release](https://github.com/zylona/re_remote_dev/releases/tag/v0.1.11) 下载完整本地集成制品。生产环境建议固定版本并校验 SHA256：
+
+```bash
+curl -fLO https://github.com/zylona/re_remote_dev/releases/download/v0.1.11/remote-dev-orchestrator-v0.1.11-linux.tar.gz
+curl -fLO https://github.com/zylona/re_remote_dev/releases/download/v0.1.11/remote-dev-orchestrator-v0.1.11-linux.tar.gz.sha256
 sha256sum -c remote-dev-orchestrator-v0.1.10-linux.tar.gz.sha256
-tar -xzf remote-dev-orchestrator-v0.1.10-linux.tar.gz
-./remote-dev-orchestrator-v0.1.10-linux/install
+tar -xzf remote-dev-orchestrator-v0.1.11-linux.tar.gz
+./remote-dev-orchestrator-v0.1.11-linux/install
 ```
 
-安装器会保留用户已有 SSH 配置，仅更新 `# >>> remote-dev ssh integration >>>` 标记区块；
-重复安装不会重复添加规则。Release asset 用于长期依赖，Actions artifact 仅用于短期 CI 传递。
+安装器会迁移并备份旧版 `# >>> remote-dev ssh integration >>>` 标记区块，但默认不再写入全局
+`LocalCommand`。重复安装不会重复添加规则。Release asset 用于长期依赖，Actions artifact 仅用于短期 CI 传递。
 详见 [docs/release.md](docs/release.md)。
+
+已安装版本可以使用制品内的 `rollback VERSION` 回滚：
+
+```bash
+./remote-dev-orchestrator-v0.1.11-linux/rollback 0.1.10
+```
+
+VS Code Remote‑SSH 默认直接使用普通的 `~/.ssh/config`。安装器不会生成或维护
+额外的 VS Code 配置文件；只要主配置中没有旧版 remote-dev hook，VS Code、Git、scp 和 rsync
+都可以共享同一份配置。
 
 ## 代理与 Codex
 

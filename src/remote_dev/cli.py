@@ -5,9 +5,10 @@ import json
 import os
 import socket
 import subprocess
+import threading
+import uuid
 import tempfile
 import time
-import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -136,7 +137,8 @@ def _install_local_orchestrator(*, confirm: bool = True, restore_flow: bool = Tr
     # release installer: merge one marked, idempotent SSH integration block.
     from .ssh_integration import install as install_ssh
 
-    install_ssh()
+    ssh_config = install_ssh()
+    console.print(f"[green]已清理旧版全局 SSH hook：{ssh_config}；VS Code 使用普通 SSH 配置[/green]")
     service = service_dir / "remote-dev-orchestrator.service"
     service_content = (project_root / "systemd/remote-dev-orchestrator.service").read_text(encoding="utf-8")
     service_content = service_content.replace(
@@ -195,6 +197,69 @@ def plan(inventory: Path = typer.Option(Path("inventory/production.yml"), "--inv
     """显示固定执行计划。"""
     _validate(inventory)
     typer.echo("P0 preflight → P2 prerequisites → P3 user shell → P4 tools/workspace → verify")
+
+
+@app.command()
+def connect(
+    destination: str = typer.Argument(..., help="SSH 目标，格式为 user@host 或 host"),
+    identity: Path | None = typer.Option(None, "--identity", "-i", help="可选 SSH 私钥路径"),
+    port: int = typer.Option(22, "--port", "-p"),
+) -> None:
+    """申请 endpoint 代理 lease，然后启动原生 SSH 会话。"""
+    from .orchestrator.client import request
+
+    if "@" in destination:
+        user, host = destination.split("@", 1)
+    else:
+        user, host = "", destination
+    if not host or not 1 <= port <= 65535:
+        raise typer.BadParameter("目标或 SSH 端口无效")
+    if not user:
+        # Keep SSH's configured User behavior while using a stable protocol
+        # identity for the lease; explicit user is recommended for ownership.
+        user = os.environ.get("USER", "unknown")
+    session_id = uuid.uuid4().hex
+    candidate: dict[str, str] = {"user": user}
+    if identity is not None:
+        candidate["identity_file"] = str(identity.expanduser())
+    endpoint = {"hostname": host, "port": port}
+    heartbeat_stop = threading.Event()
+    heartbeat_thread: threading.Thread | None = None
+
+    def heartbeat() -> None:
+        # Keep the lease alive without touching the SSH PTY or its stdin/stdout.
+        while not heartbeat_stop.wait(30.0):
+            try:
+                response = request({"op": "heartbeat", "endpoint": endpoint, "session_id": session_id}, timeout=5)
+                if not response.get("ok"):
+                    return
+            except (OSError, TimeoutError, ValueError, ConnectionError):
+                # A transient orchestrator restart must never interrupt the
+                # native SSH process; release/fresh acquire handles recovery.
+                continue
+
+    try:
+        acquired = request({"op": "acquire", "endpoint": endpoint, "candidate": candidate, "session_id": session_id}, timeout=5)
+        if not acquired.get("ok"):
+            raise RuntimeError(f"无法申请代理会话：{acquired.get('error', 'unknown')}")
+        heartbeat_thread = threading.Thread(target=heartbeat, name="remote-dev-lease-heartbeat", daemon=True)
+        heartbeat_thread.start()
+        ssh_args = ["ssh"]
+        if identity is not None:
+            ssh_args.extend(["-i", str(identity.expanduser())])
+        if port != 22:
+            ssh_args.extend(["-p", str(port)])
+        ssh_args.append(f"{user}@{host}")
+        result = subprocess.run(ssh_args, check=False)
+        raise typer.Exit(result.returncode)
+    finally:
+        heartbeat_stop.set()
+        if heartbeat_thread is not None:
+            heartbeat_thread.join(timeout=1)
+        try:
+            request({"op": "release", "endpoint": endpoint, "session_id": session_id}, timeout=2)
+        except (OSError, TimeoutError, ValueError):
+            pass
 
 
 @app.command("local-service-install")
@@ -362,7 +427,7 @@ def bootstrap(inventory: Path = typer.Option(Path("inventory/production.yml"), "
         _BOOTSTRAP_TARGET_DIGEST = None
     install_persistent(target, key)
     control_path = MasterManager().control_path(target)
-    install_ssh(proxy_port=4227)
+    install_ssh()
     install_target(host=target_host, control_path=control_path, identity_file=key)
     console.print(f"[green]bootstrap 完成：{host_name}，digest={target.digest}，长期会话已启用[/green]")
 
@@ -393,17 +458,22 @@ def doctor(inventory: Path = typer.Option(Path("inventory/production.yml"), "--i
 
 
 @app.command("ssh-integration-install")
-def ssh_integration_install(proxy_port: int = typer.Option(4227, "--proxy-port")) -> None:
-    """安装本机 SSH 共享连接与远端代理转发集成。"""
+def ssh_integration_install(
+    proxy_port: int = typer.Option(4227, "--proxy-port"),
+    enable_hook: bool = typer.Option(False, "--enable-hook", help="显式启用旧版全局 LocalCommand hook"),
+) -> None:
+    """迁移旧版 SSH 集成；默认不写入全局 hook。"""
     if not 1 <= proxy_port <= 65535:
         typer.echo("配置错误：代理端口必须位于 1-65535", err=True)
         raise typer.Exit(2)
-    from .ssh_integration import install
+    from .ssh_integration import install, install_legacy_hook
 
-    config = install(proxy_port=proxy_port)
+    config = install_legacy_hook(proxy_port=proxy_port) if enable_hook else install()
     typer.echo(f"SSH 配置已迁移：{config}")
-    typer.echo("已启用普通 SSH 自动代理 hook；交互窗口使用独立连接，4227 由 per-target user 隧道维护。")
-    typer.echo("新建 SSH 连接后生效；已有 ControlMaster 连接不会重新读取配置。")
+    if enable_hook:
+        typer.echo("已显式启用旧版全局 hook；它可能影响 VS Code、Git 和其他 SSH 客户端。")
+    else:
+        typer.echo("已移除全局 hook；普通 SSH、VS Code、Git、scp 和 rsync 保持原生连接。")
 
 
 @app.command("ssh-integration-uninstall")

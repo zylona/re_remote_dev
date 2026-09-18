@@ -4,11 +4,14 @@ from __future__ import annotations
 import os
 import re
 import tempfile
+import time
 from pathlib import Path
 
 
 BEGIN = "# >>> remote-dev ssh integration >>>"
 END = "# <<< remote-dev ssh integration <<<"
+VSCODE_BEGIN = "# >>> remote-dev vscode ssh config >>>"
+VSCODE_END = "# <<< remote-dev vscode ssh config <<<"
 INCLUDE = "Include ~/.config/remote-dev/ssh_config"  # legacy marker, removed on migration
 
 
@@ -106,8 +109,8 @@ def _without_target_blocks(content: str) -> str:
     )
 
 
-def install(*, home: Path | None = None, proxy_port: int = 4227) -> Path:
-    """Install one idempotent shared SSH master/forwarding block."""
+def migrate_legacy(*, home: Path | None = None) -> Path:
+    """Remove legacy project SSH directives without adding new global rules."""
     root = home or Path.home()
     ssh_dir = root / ".ssh"
     config = ssh_dir / "config"
@@ -121,9 +124,29 @@ def install(*, home: Path | None = None, proxy_port: int = 4227) -> Path:
     # Migrate only the exact legacy remote-dev forwarding directives; leave
     # unrelated user forwarding rules untouched.
     cleaned = re.sub(r"^\s*(?:RemoteForward\s+127\.0\.0\.1:4227\s+127\.0\.0\.1:4227|LocalForward\s+127\.0\.0\.1:1455\s+127\.0\.0\.1:1455)\s*$\n?", "", cleaned, flags=re.MULTILINE)
-    cleaned = _merge_global_block(cleaned, proxy_port=proxy_port)
+    # P1 deliberately does not add a replacement global Host/LocalCommand block.
     if cleaned != original:
+        backup_dir = ssh_dir / "remote-dev" / "backups"
+        backup_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+        backup = backup_dir / f"config.{time.strftime('%Y%m%dT%H%M%S')}.{os.getpid()}~"
+        _atomic_write(backup, original, 0o600)
         _atomic_write(config, cleaned, 0o600)
+    return config
+
+
+def install(*, home: Path | None = None, proxy_port: int = 4227) -> Path:
+    """Compatibility alias for the safe P1 legacy migration."""
+    return migrate_legacy(home=home)
+
+
+def install_legacy_hook(*, home: Path | None = None, proxy_port: int = 4227) -> Path:
+    """Explicit opt-in legacy integration for users accepting global SSH hooks."""
+    root = home or Path.home()
+    config = migrate_legacy(home=root)
+    original = config.read_text(encoding="utf-8") if config.exists() else ""
+    updated = _merge_global_block(original, proxy_port=proxy_port)
+    if updated != original:
+        _atomic_write(config, updated, 0o600)
     return config
 
 
@@ -149,4 +172,7 @@ def uninstall(*, home: Path | None = None) -> Path:
     fragment = root / ".config" / "remote-dev" / "ssh_config"
     if fragment.exists():
         fragment.unlink()
+    vscode = root / ".ssh" / "config-vscode"
+    if vscode.exists() and VSCODE_BEGIN in vscode.read_text(encoding="utf-8"):
+        vscode.unlink()
     return config

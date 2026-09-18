@@ -10,19 +10,35 @@ if ! command -v "$python_bin" >/dev/null 2>&1; then
   exit 1
 fi
 mkdir -p "$base/versions"
-rm -rf "$target"
-cp -a "$pkg_dir/." "$target/"
-ln -sfn "$target" "$base/current"
+staging="$(mktemp -d "$base/versions/.${version}.staging.XXXXXX")"
+trap 'rm -rf "$staging"' EXIT
+cp -a "$pkg_dir/." "$staging/"
+if [ -e "$target" ] || [ -L "$target" ]; then
+  backup_target="$base/versions/.${version}.previous.$(date +%Y%m%dT%H%M%S).$$"
+  mv "$target" "$backup_target"
+fi
+mv "$staging" "$target"
+next_link="$base/.current.$$"
+ln -s "$target" "$next_link"
+mv -Tf "$next_link" "$base/current"
 bin_dir="${XDG_BIN_HOME:-$HOME/.local/bin}"
 mkdir -p "$bin_dir"
 ln -sfn "$base/current/bin/remote-dev-orchestrator-server" "$bin_dir/remote-dev-orchestrator-server"
 ln -sfn "$base/current/bin/remote-dev-ssh-hook" "$bin_dir/remote-dev-ssh-hook"
+ln -sfn "$base/current/bin/tssh" "$bin_dir/tssh"
 unit_dir="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
 mkdir -p "$unit_dir"
 sed "s#^ExecStart=.*#ExecStart=$base/current/bin/remote-dev-orchestrator-server#" "$pkg_dir/remote-dev-orchestrator.service" > "$unit_dir/remote-dev-orchestrator.service"
 cp "$pkg_dir/remote-dev-orchestrator.socket" "$unit_dir/remote-dev-orchestrator.socket"
 systemctl --user daemon-reload
+# Migrate units from pre-P3 releases without touching unrelated user units.
+shopt -s nullglob
+for legacy_unit in "$unit_dir"/remote-dev-master-*.service; do
+  systemctl --user disable --now "$(basename "$legacy_unit")" 2>/dev/null || true
+  rm -f "$legacy_unit"
+done
+shopt -u nullglob
 systemctl --user enable --now remote-dev-orchestrator.socket
 systemctl --user restart remote-dev-orchestrator.service
-PYTHONPATH="$base/current/lib${PYTHONPATH:+:$PYTHONPATH}" "$python_bin" -c 'from remote_dev.ssh_integration import install; print(f"SSH config integrated: {install()}")'
-echo "remote-dev-orchestrator $version installed; service, SSH hook, and SSH config integration are enabled"
+PYTHONPATH="$base/current/lib${PYTHONPATH:+:$PYTHONPATH}" "$python_bin" -c 'from remote_dev.ssh_integration import install; print(f"Legacy SSH integration migrated: {install()}")'
+echo "remote-dev-orchestrator $version installed; service enabled and SSH config migrated"

@@ -1,18 +1,22 @@
-# 本地编排层能力契约（P0–P3）
+# 本地编排层能力契约（现行实现与重构基线）
+
+> P0 重构基线：普通 `ssh user@host` 必须保持原生，不再默认触发项目 hook。自动代理由
+> `remote-dev connect user@host` 显式申请；VS Code Remote-SSH、Git、scp、rsync 不读取
+> 项目编排配置。下文“普通 SSH 自动代理”描述的是旧版兼容实现，进入 P1 后将移除默认启用。
 
 P0 只定义本地 SSH/Codex 编排层的身份、状态、事件和错误协议，不建立 SSH 连接，不修改用户 SSH 配置，不写入远端，不启动 systemd 服务。
 
 ## 本地服务安装入口
 
-### 普通 SSH 自动代理
+### 旧版普通 SSH 自动代理（已弃用）
 
-安装本机服务后执行一次：
+旧版本通过以下命令启用全局 hook：
 
 ```bash
 ./re-remote ssh-integration-install
 ```
 
-受管 SSH 配置会启用 `PermitLocalCommand`，在每次普通 `ssh user@host` 成功连接后调用
+该模式会启用 `PermitLocalCommand`，在每次普通 `ssh user@host` 成功连接后调用
 `~/.local/bin/remote-dev-ssh-hook`。该 hook 根据 SSH 最终解析出的主机、用户、端口和密钥，
 为设备 endpoint（主机名/IP + SSH 端口）创建唯一的 systemd user proxy unit，并以独立
 `ssh -N -T -R 127.0.0.1:4227` 维持隧道。同一设备的不同用户和多个窗口共享一个 unit；
@@ -28,6 +32,31 @@ TTY 让用户输入一次 SSH 密码建立临时隧道，但密码隧道断线�
 服务始终以当前用户身份运行，不请求 root，不监听公网。systemd user manager 存续期间，socket
 activation 保证服务可用；是否在完全退出登录后继续运行由系统的 user lingering 策略决定，项目
 不自动修改该系统策略。
+
+### P1 原生 SSH 契约
+
+P1 起本地服务安装和 bootstrap 会迁移旧版全局 hook，并在写入前创建带时间戳的
+`~/.ssh/remote-dev/backups/config.*~` 备份；不会新增 `LocalCommand`、`PermitLocalCommand`、
+`ControlMaster no`、`ControlPath none` 或项目固定转发规则。普通 SSH、VS Code Remote-SSH、
+Git、scp 和 rsync 不再触发 remote-dev 服务。自动代理由 resolver 的显式
+`remote-dev connect user@host` 申请。
+
+## P2 Endpoint 注册协议
+
+P2 引入本地 Unix socket 的 endpoint lease 协议，但暂不创建真实 SSH 转发。resolver 使用
+`acquire` 注册一个 `hostname + port` endpoint 和当前 SSH 用户候选，使用随机 `session_id`
+保证重复请求幂等；退出时调用 `release`。同一 endpoint 的多个 session 共享一个登记记录，
+并返回当前候选 owner。P3 才会根据该登记启动唯一的 4227 forwarder 并实现 owner 接管。
+
+请求不包含密码或私钥内容：
+
+```json
+{"op":"acquire","endpoint":{"hostname":"host","port":22},"candidate":{"user":"u","identity_fingerprint":"sha256:..."},"session_id":"opaque"}
+```
+
+状态查询会额外返回 `endpoints` 数组，包含 endpoint 摘要、状态、owner 和 session 数量；
+状态存于编排器内存，服务重启后安全清空，不会产生远端副作用。非法 endpoint、candidate、
+session 或跨 endpoint 重用 session 会返回 `PROTOCOL_INVALID`/`SESSION_CONFLICT`，不会使服务退出。
 
 ## P3 Codex 生命周期 Shim
 
@@ -45,6 +74,15 @@ Codex 安装由 `roles/codex` 提供一个薄包装命令：真实二进制位�
 `EventForwarder`（目标 4228 → 本机 4230）承载，避免代理或事件流量阻塞交互终端。两个进程
 均启用 `ExitOnForwardFailure` 和保活参数，停止时按相反顺序注销并清理。
 
+## P4 会话 Lease 与自动清理
+
+`remote-dev connect user@host` 会向本地编排器申请随机 `session_id` lease，然后启动原生
+SSH。编排器为 lease 记录 endpoint、候选用户、密钥指纹和最后 heartbeat，不记录密码或完整
+命令行。连接进程每 30 秒发送一次 heartbeat；重复 acquire 使用同一 `session_id` 幂等返回，
+会话退出调用 `release`，超过 120 秒未 heartbeat 的孤儿 lease 会被自动释放。只有 endpoint
+的最后一个 lease 释放时，才允许停止该 endpoint 的 4227 forwarder；其他用户仍在线时不会
+误删共享隧道。
+
 ## P4 OAuth callback 转发
 
 `OAuthManager` 使用独立 SSH `-N -L` 进程临时添加
@@ -60,6 +98,15 @@ IPv4 是必需路径，`::1` IPv6 listener 在系统支持时以 best-effort 方
 Codex 进程发送 `CODEX_EXIT` 时终止全部 callback forwarder。
 因此用户不需要额外执行登录转发命令。若 1455 已被其他程序占用或 master 不可用，状态
 记为失败但 Codex 本身继续启动，便于用户稍后重试。
+
+## P5 故障恢复与诊断
+
+endpoint forwarder 失败时不会阻塞或关闭交互 SSH。编排器记录不含凭据的故障类别，并按
+5、10、20、40、80、160、300 秒的上限策略重试；状态查询只返回 `last_error` 类别和剩余
+重试时间，不暴露完整 SSH 错误、密钥路径或密码。支持的主要类别包括
+`SSH_AUTH_FAILED`、`FORWARDING_DENIED`、`REMOTE_PORT_BUSY`、`REMOTE_UNREACHABLE` 和
+`LOCAL_PROXY_UNAVAILABLE`。systemd user unit 同时配置失败重启限流、内存上限和任务数上限，
+避免代理或编排器故障造成重启风暴。
 
 ## P6 可选长期会话
 

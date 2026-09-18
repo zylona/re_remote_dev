@@ -6,8 +6,15 @@ if [ -d "$base/current/lib" ] && command -v "$python_bin" >/dev/null 2>&1; then
   PYTHONPATH="$base/current/lib${PYTHONPATH:+:$PYTHONPATH}" "$python_bin" -c 'from remote_dev.ssh_integration import uninstall; print(f"SSH config integration removed: {uninstall()}")' || true
 fi
 systemctl --user disable --now remote-dev-orchestrator.socket remote-dev-orchestrator.service 2>/dev/null || true
+shopt -s nullglob
+unit_dir="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
+for managed_unit in "$unit_dir"/remote-dev-master-*.service "$unit_dir"/remote-dev-proxy-*.service; do
+  systemctl --user disable --now "$(basename "$managed_unit")" 2>/dev/null || true
+  rm -f "$managed_unit"
+done
+shopt -u nullglob
 rm -f "${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/remote-dev-orchestrator.service" "${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/remote-dev-orchestrator.socket"
-rm -f "${XDG_BIN_HOME:-$HOME/.local/bin}/remote-dev-orchestrator-server" "${XDG_BIN_HOME:-$HOME/.local/bin}/remote-dev-ssh-hook"
+rm -f "${XDG_BIN_HOME:-$HOME/.local/bin}/remote-dev-orchestrator-server" "${XDG_BIN_HOME:-$HOME/.local/bin}/remote-dev-ssh-hook" "${XDG_BIN_HOME:-$HOME/.local/bin}/tssh"
 systemctl --user daemon-reload 2>/dev/null || true
 rm -rf "$base"
 echo "remote-dev-orchestrator removed"

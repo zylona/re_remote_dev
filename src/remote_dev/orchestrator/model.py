@@ -86,6 +86,28 @@ class TargetKey:
 
 
 @dataclass(frozen=True, slots=True)
+class EndpointKey:
+    """Identity of one remote network namespace, independent of SSH user."""
+
+    hostname: str
+    port: int = 22
+
+    def __post_init__(self) -> None:
+        if not self.hostname.strip():
+            raise ValueError("hostname 不能为空")
+        if not 1 <= self.port <= 65535:
+            raise ValueError("port 必须位于 1..65535")
+
+    @property
+    def canonical(self) -> str:
+        return f"{self.hostname}:{self.port}|"
+
+    @property
+    def digest(self) -> str:
+        return sha256(self.canonical.encode("utf-8")).hexdigest()[:32]
+
+
+@dataclass(frozen=True, slots=True)
 class TargetStatus:
     target: TargetKey
     master: MasterState = MasterState.ABSENT

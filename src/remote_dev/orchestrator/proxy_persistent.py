@@ -59,3 +59,14 @@ def ensure(target: TargetKey, identity: Path, *, systemd_dir: Path | None = None
     if changed:
         subprocess.run(["systemctl", "--user", "restart", path.name], check=True)
     return path
+
+
+def remove(target: TargetKey, *, systemd_dir: Path | None = None) -> Path:
+    """Stop and remove the endpoint unit created by :func:`ensure`."""
+    directory = systemd_dir or (Path.home() / ".config/systemd/user")
+    path = directory / unit_name(target)
+    subprocess.run(["systemctl", "--user", "disable", "--now", path.name], check=False)
+    if path.exists():
+        path.unlink()
+    subprocess.run(["systemctl", "--user", "daemon-reload"], check=False)
+    return path
