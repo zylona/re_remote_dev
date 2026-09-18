@@ -48,6 +48,18 @@ def _parse_destination(value: str) -> tuple[str, str]:
     return user, host
 
 
+def _ssh_command(destination: str, identity: str | None, port: int, passthrough: list[str]) -> list[str]:
+    """Build native ssh argv with the destination before an optional command."""
+    command = ["ssh"]
+    if identity:
+        command.extend(["-i", identity])
+    if port != 22:
+        command.extend(["-p", str(port)])
+    command.append(destination)
+    command.extend(passthrough)
+    return command
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="tssh", description="使用 remote-dev 4227 转发连接 SSH 目标")
     parser.add_argument("destination", help="SSH 目标，格式为 user@host 或 host")
@@ -64,15 +76,11 @@ def main(argv: list[str] | None = None) -> int:
     session_id = uuid.uuid4().hex
     endpoint = {"hostname": host, "port": args.port}
     candidate: dict[str, str] = {"user": user}
-    ssh_args = ["ssh"]
+    identity = None
     if args.identity:
         identity = str(Path(args.identity).expanduser())
         candidate["identity_file"] = identity
-        ssh_args.extend(["-i", identity])
-    if args.port != 22:
-        ssh_args.extend(["-p", str(args.port)])
-    ssh_args.extend(args.ssh_args)
-    ssh_args.append(args.destination)
+    ssh_args = _ssh_command(args.destination, identity, args.port, args.ssh_args)
     stop = threading.Event()
     heartbeat_thread: threading.Thread | None = None
 
