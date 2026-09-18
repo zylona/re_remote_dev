@@ -60,6 +60,30 @@ def _ssh_command(destination: str, identity: str | None, port: int, passthrough:
     return command
 
 
+def _resolve_identity(destination: str, explicit: str | None) -> str | None:
+    """Resolve the first usable IdentityFile from OpenSSH's effective config."""
+    if explicit:
+        return str(Path(explicit).expanduser())
+    try:
+        result = subprocess.run(
+            ["ssh", "-G", destination],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    for line in result.stdout.splitlines():
+        key, _, value = line.partition(" ")
+        if key != "identityfile" or not value:
+            continue
+        candidate = Path(value).expanduser()
+        if candidate.is_file():
+            return str(candidate)
+    return None
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="tssh", description="使用 remote-dev 4227 转发连接 SSH 目标")
     parser.add_argument("destination", help="SSH 目标，格式为 user@host 或 host")
@@ -76,9 +100,8 @@ def main(argv: list[str] | None = None) -> int:
     session_id = uuid.uuid4().hex
     endpoint = {"hostname": host, "port": args.port}
     candidate: dict[str, str] = {"user": user}
-    identity = None
-    if args.identity:
-        identity = str(Path(args.identity).expanduser())
+    identity = _resolve_identity(args.destination, args.identity)
+    if identity:
         candidate["identity_file"] = identity
     ssh_args = _ssh_command(args.destination, identity, args.port, args.ssh_args)
     stop = threading.Event()
