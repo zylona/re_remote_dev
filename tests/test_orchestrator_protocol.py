@@ -88,12 +88,34 @@ def test_endpoint_acquire_is_idempotent_and_release_keeps_other_session():
     listener.close()
 
 
+def test_force_cleanup_stops_all_endpoint_forwarders(tmp_path):
+    class FakeForwarder:
+        def __init__(self):
+            self.stopped = []
+        def start(self, endpoint, user, identity, **kwargs):
+            pass
+        def stop(self, endpoint, user=None):
+            self.stopped.append((endpoint, user))
+
+    listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    forwarder = FakeForwarder()
+    server = OrchestratorServer(listener, None, endpoint_forwarder=forwarder)
+    endpoint = {"hostname": "host", "port": 22}
+    server.handle({"op": "acquire", "endpoint": endpoint, "candidate": {"user": "u", "identity_file": str(tmp_path / "id")}, "session_id": "s"})
+    result = server.handle({"op": "cleanup"})
+    assert result == {"ok": True, "cleaned_endpoints": 1}
+    assert len(forwarder.stopped) == 1
+    assert server.handle({"op": "status"})["endpoints"] == []
+    assert server.handle({"op": "heartbeat", "endpoint": endpoint, "session_id": "s"}) == {"ok": False, "error": "LEASE_CLEARED"}
+    listener.close()
+
+
 def test_endpoint_owner_forwarder_is_started_once_and_reassigned(monkeypatch, tmp_path):
     class FakeForwarder:
         def __init__(self):
             self.started = []
             self.stopped = []
-        def start(self, endpoint, user, identity):
+        def start(self, endpoint, user, identity, **kwargs):
             self.started.append((endpoint, user, identity))
         def stop(self, endpoint, user=None):
             self.stopped.append((endpoint, user))
@@ -113,11 +135,31 @@ def test_endpoint_owner_forwarder_is_started_once_and_reassigned(monkeypatch, tm
     listener.close()
 
 
+def test_interactive_session_upgrades_proxy_only_lease_to_event_forward(tmp_path):
+    class FakeForwarder:
+        def __init__(self):
+            self.started = []
+        def start(self, endpoint, user, identity, **kwargs):
+            self.started.append((endpoint, user, kwargs.get("event_forward", True)))
+        def stop(self, endpoint, user=None):
+            pass
+
+    listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    forwarder = FakeForwarder()
+    server = OrchestratorServer(listener, None, endpoint_forwarder=forwarder)
+    endpoint = {"hostname": "host", "port": 22}
+    server.handle({"op": "acquire", "endpoint": endpoint, "candidate": {"user": "u", "identity_file": str(tmp_path / "id")}, "session_id": "persistent", "event_forward": False})
+    server.handle({"op": "acquire", "endpoint": endpoint, "candidate": {"user": "u", "identity_file": str(tmp_path / "id")}, "session_id": "interactive"})
+    assert [item[2] for item in forwarder.started] == [False, True]
+    assert len(server.endpoints[next(iter(server.endpoints))]["forwards"]) == 2
+    listener.close()
+
+
 def test_degraded_endpoint_retries_with_bounded_backoff(tmp_path):
     class FlakyForwarder:
         def __init__(self):
             self.calls = 0
-        def start(self, endpoint, user, identity):
+        def start(self, endpoint, user, identity, **kwargs):
             self.calls += 1
             if self.calls == 1:
                 raise RuntimeError("connection timed out")

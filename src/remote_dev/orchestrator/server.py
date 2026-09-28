@@ -20,7 +20,9 @@ from .model import EndpointKey, ForwardState, ForwardStatus, MasterState, OAuthS
 from .protocol import ProtocolError, decode_event
 from .oauth import OAuthError, OAuthManager
 from .endpoint_forward import EndpointForwardManager
+from .proxy_persistent import cleanup_orphans
 from .health import classify_failure, retry_delay
+from ..lease_config import load as load_lease_settings
 
 MAX_REQUEST_BYTES = 8 * 1024
 
@@ -36,7 +38,11 @@ class OrchestratorServer:
         # idempotent acquire/release semantics.
         self.endpoints: dict[str, dict[str, Any]] = {}
         self.sessions: dict[str, dict[str, Any]] = {}
-        self.lease_ttl = 120.0
+        # A normal tssh exit sends ``release`` immediately.  This short grace
+        # period is only for a killed terminal or a broken network path; it
+        # keeps the proxy responsive without leaving 4227/4228 behind for
+        # minutes.
+        self.lease_ttl = load_lease_settings().lease_ttl
         self.endpoint_forwarder = endpoint_forwarder or EndpointForwardManager()
         self._identity_files: dict[str, Path] = {}
         # A TUI redraw may yield the same authorize URL through both the
@@ -91,6 +97,11 @@ class OrchestratorServer:
                 summary = {key: value for key, value in record.items() if key != "next_retry"}
                 if "next_retry" in record:
                     summary["retry_in"] = round(max(0.0, float(record["next_retry"]) - now), 1)
+                digest = record.get("endpoint_digest")
+                summary["mode"] = "PERSISTENT" if any(
+                    item.get("endpoint_digest") == digest and item.get("persistent")
+                    for item in self.sessions.values()
+                ) else "SESSION"
                 endpoints.append(summary)
             return {
                 "ok": True,
@@ -100,6 +111,8 @@ class OrchestratorServer:
         if op == "shutdown":
             self.running = False
             return {"ok": True}
+        if op == "cleanup":
+            return self._force_cleanup()
         if op in {"acquire", "release", "heartbeat"}:
             return self._handle_lease(op, payload)
         if op in {"register", "unregister"}:
@@ -178,16 +191,38 @@ class OrchestratorServer:
                         return {"ok": False, "error": "SESSION_CONFLICT"}
                     record = self.endpoints[digest]
                     previous["last_seen"] = time.monotonic()
+                    if bool(payload.get("event_forward", True)) and not record.get("event_required", True):
+                        identity_file = previous.get("identity_file")
+                        if identity_file:
+                            self.endpoint_forwarder.start(endpoint, previous["user"], Path(identity_file).expanduser(), event_forward=True)
+                            record["event_required"] = True
+                            record["forwards"] = self._forward_rows(record["state"], record.get("last_error"), event_forward=True)
                     return {"ok": True, "endpoint_digest": digest, "state": record["state"], "owner": record["owner"], "session_count": record["session_count"], "reused": True}
+                event_required = bool(payload.get("event_forward", True))
                 record = self.endpoints.setdefault(
                     digest,
-                    {"endpoint": {"hostname": endpoint.hostname, "port": endpoint.port}, "endpoint_digest": digest, "state": "STARTING", "owner": None, "session_count": 0},
+                    {
+                        "endpoint": {"hostname": endpoint.hostname, "port": endpoint.port},
+                        "endpoint_digest": digest,
+                        "state": "STARTING",
+                        "owner": None,
+                        "session_count": 0,
+                        "event_required": event_required,
+                        "forwards": self._forward_rows("STARTING", event_forward=event_required),
+                    },
                 )
                 if record["owner"] is None:
                     record["owner"] = user
                 record["session_count"] += 1
                 identity_file = payload.get("candidate", {}).get("identity_file")
-                session: dict[str, Any] = {"endpoint_digest": digest, "user": user, "identity_fingerprint": fingerprint, "last_seen": time.monotonic()}
+                session: dict[str, Any] = {
+                    "endpoint_digest": digest,
+                    "user": user,
+                    "identity_fingerprint": fingerprint,
+                    "last_seen": time.monotonic(),
+                    "event_forward": event_required,
+                    "persistent": bool(payload.get("persistent", False)),
+                }
                 if isinstance(identity_file, str) and identity_file:
                     session["identity_file"] = identity_file
                 self.sessions[session_id] = session
@@ -222,15 +257,29 @@ class OrchestratorServer:
                             event_forward=previous_target.event_forward,
                             oauth_forward=previous_target.oauth_forward,
                         )
+                # A proxy-only persistent lease may already own this
+                # endpoint.  When a new interactive session joins, upgrade
+                # the shared unit once so the Codex event callback 4228→4230
+                # becomes available to that session as well.
+                if event_required and not record.get("event_required", True) and isinstance(identity_file, str) and identity_file:
+                    try:
+                        self.endpoint_forwarder.start(endpoint, user, Path(identity_file).expanduser(), event_forward=True)
+                        record["event_required"] = True
+                        record["forwards"] = self._forward_rows(record["state"], record.get("last_error"), event_forward=True)
+                    except (OSError, RuntimeError, ValueError, subprocess.SubprocessError) as exc:
+                        self._mark_forward_failure(record, exc)
                 if record["session_count"] == 1 and isinstance(identity_file, str) and identity_file:
                     try:
-                        self.endpoint_forwarder.start(endpoint, user, Path(identity_file).expanduser())
+                        self.endpoint_forwarder.start(endpoint, user, Path(identity_file).expanduser(), event_forward=event_required)
                         record["state"] = "READY"
+                        record["forwards"] = self._forward_rows("READY", event_forward=event_required)
                     except (OSError, RuntimeError, ValueError, subprocess.SubprocessError) as exc:
                         self._mark_forward_failure(record, exc)
                 return {"ok": True, "endpoint_digest": digest, "state": record["state"], "owner": record["owner"], "session_count": record["session_count"], "reused": record["session_count"] > 1}
             previous = self.sessions.get(session_id)
             if previous is None:
+                if op == "heartbeat":
+                    return {"ok": False, "error": "LEASE_CLEARED"}
                 return {"ok": True, "released": False}
             if previous["endpoint_digest"] != endpoint.digest:
                 return {"ok": False, "error": "SESSION_CONFLICT"}
@@ -269,20 +318,55 @@ class OrchestratorServer:
                     pass
                 self.endpoints.pop(previous["endpoint_digest"], None)
                 return {"ok": True, "released": True, "endpoint_digest": previous["endpoint_digest"], "session_count": 0}
+            remaining = [item for item in self.sessions.values() if item["endpoint_digest"] == previous["endpoint_digest"]]
+            desired_event = any(bool(item.get("event_forward", True)) for item in remaining)
+            if desired_event != bool(record.get("event_required", True)):
+                replacement = next((item for item in remaining if item.get("identity_file")), None)
+                if replacement:
+                    try:
+                        self.endpoint_forwarder.start(endpoint, replacement["user"], Path(replacement["identity_file"]).expanduser(), event_forward=desired_event)
+                        record["event_required"] = desired_event
+                        record["forwards"] = self._forward_rows(record["state"], record.get("last_error"), event_forward=desired_event)
+                    except (OSError, RuntimeError, ValueError, subprocess.SubprocessError) as exc:
+                        self._mark_forward_failure(record, exc)
             if previous.get("user") == record.get("owner"):
                 candidates = [item for item in self.sessions.values() if item["endpoint_digest"] == previous["endpoint_digest"]]
                 candidates.sort(key=lambda item: item["user"])
                 replacement = candidates[0]
                 record["owner"] = replacement["user"]
+                record["event_required"] = any(bool(item.get("event_forward", True)) for item in candidates)
                 if replacement.get("identity_file"):
                     try:
-                        self.endpoint_forwarder.start(endpoint, replacement["user"], Path(replacement["identity_file"]).expanduser())
+                        self.endpoint_forwarder.start(endpoint, replacement["user"], Path(replacement["identity_file"]).expanduser(), event_forward=record["event_required"])
                         record["state"] = "READY"
+                        record["forwards"] = self._forward_rows("READY", event_forward=record["event_required"])
                     except (OSError, RuntimeError, ValueError, subprocess.SubprocessError) as exc:
                         self._mark_forward_failure(record, exc)
             return {"ok": True, "released": True, "endpoint_digest": previous["endpoint_digest"], "owner": record["owner"], "session_count": record["session_count"]}
         except (TypeError, ValueError, KeyError) as exc:
             return {"ok": False, "error": "PROTOCOL_INVALID", "detail": str(exc)}
+
+    def _force_cleanup(self) -> dict[str, Any]:
+        """Stop every managed endpoint tunnel and discard all in-memory leases."""
+        stopped = 0
+        for record in list(self.endpoints.values()):
+            endpoint_data = record.get("endpoint")
+            if not isinstance(endpoint_data, dict):
+                continue
+            try:
+                self.endpoint_forwarder.stop(
+                    EndpointKey(str(endpoint_data["hostname"]), int(endpoint_data["port"])),
+                    record.get("owner"),
+                )
+                stopped += 1
+            except (OSError, RuntimeError, ValueError, subprocess.SubprocessError):
+                continue
+        self.sessions.clear()
+        self.endpoints.clear()
+        self.targets.clear()
+        self._identity_files.clear()
+        self._oauth_browser_opened.clear()
+        return {"ok": True, "cleaned_endpoints": stopped}
 
     def _expire_sessions(self) -> None:
         """Release leases that stopped heartbeating without trusting process exit."""
@@ -301,6 +385,37 @@ class OrchestratorServer:
         record["failure_count"] = failures
         record["last_error"] = classify_failure(str(exc))
         record["next_retry"] = time.monotonic() + retry_delay(failures)
+        record["forwards"] = OrchestratorServer._forward_rows("DEGRADED", record["last_error"])
+
+    @staticmethod
+    def _forward_rows(state: str, error: str | None = None, *, event_forward: bool = True) -> list[dict[str, Any]]:
+        """Describe the two endpoint forwards owned by the SSH tunnel.
+
+        The endpoint unit uses reverse forwarding: the first port is the
+        remote HTTP proxy and the second is the remote OAuth/event channel.
+        Keeping this telemetry beside the lease makes ``tssh list`` useful
+        without exposing SSH command lines or credentials.
+        """
+        rows = [{
+            "kind": "proxy",
+            "remote_host": "127.0.0.1",
+            "remote_port": 4227,
+            "local_host": "127.0.0.1",
+            "local_port": 4227,
+            "state": state,
+            "last_error": error,
+        }]
+        if event_forward:
+            rows.append({
+                "kind": "event",
+                "remote_host": "127.0.0.1",
+                "remote_port": 4228,
+                "local_host": "127.0.0.1",
+                "local_port": 4230,
+                "state": state,
+                "last_error": error,
+            })
+        return rows
 
     def _reconcile_endpoints(self) -> None:
         """Retry degraded endpoint owners using bounded exponential backoff."""
@@ -323,9 +438,11 @@ class OrchestratorServer:
                     EndpointKey(str(endpoint_data["hostname"]), int(endpoint_data["port"])),
                     owner["user"],
                     Path(str(owner["identity_file"])).expanduser(),
+                    event_forward=bool(record.get("event_required", True)),
                 )
                 record["owner"] = owner["user"]
                 record["state"] = "READY"
+                record["forwards"] = self._forward_rows("READY", event_forward=bool(record.get("event_required", True)))
                 record["failure_count"] = 0
                 record.pop("last_error", None)
                 record.pop("next_retry", None)
@@ -463,7 +580,14 @@ class OrchestratorServer:
 
 
 def _listener_from_systemd() -> socket.socket | None:
-    if os.environ.get("LISTEN_PID") != str(os.getpid()) or os.environ.get("LISTEN_FDS") != "1":
+    # ``LISTEN_PID`` is useful as a guard for a directly launched process, but
+    # it is not reliable through every shell/exec wrapper used by packaged
+    # installs (and can be stale during a user-service restart).  Falling back
+    # to a second self-bound listener in that case is dangerous: the old
+    # process may later unlink systemd's pathname while the new process owns
+    # fd 3.  systemd only sets LISTEN_FDS for an activation, so that is the
+    # authoritative check here.
+    if os.environ.get("LISTEN_FDS") != "1":
         return None
     # Transfer ownership of systemd's fd 3 directly.  ``socket.fromfd``
     # duplicates the descriptor, which can leave the activation listener in a
@@ -498,6 +622,10 @@ def run_server(path: Path | None = None) -> None:
         tcp_listener.close()
         tcp_listener = None
     server = OrchestratorServer(listener, None if activated else path, extra_listeners=[tcp_listener] if tcp_listener else None)
+    # Lease state is intentionally in memory.  Any proxy unit left by a
+    # previous process is therefore an orphan and must not keep remote 4227
+    # alive until the next user login.
+    cleanup_orphans()
     signal.signal(signal.SIGTERM, lambda *_: setattr(server, "running", False))
     signal.signal(signal.SIGINT, lambda *_: setattr(server, "running", False))
     server.serve()

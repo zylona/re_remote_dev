@@ -584,6 +584,19 @@ def orchestrator_stop() -> None:
     typer.echo(json.dumps(result, ensure_ascii=False))
 
 
+@orchestrator_app.command("cleanup")
+def orchestrator_cleanup() -> None:
+    """强制停止全部 tssh 代理隧道并清空本地 lease。"""
+    from .orchestrator.client import request
+
+    try:
+        result = request({"op": "cleanup"})
+    except (OSError, TimeoutError, ValueError) as exc:
+        typer.echo(f"ORCHESTRATOR_UNAVAILABLE: {exc}", err=True)
+        raise typer.Exit(1) from exc
+    typer.echo(json.dumps(result, ensure_ascii=False))
+
+
 @orchestrator_app.command("connect")
 def orchestrator_connect(
     host: str = typer.Argument(..., help="目标主机名或 IP"),

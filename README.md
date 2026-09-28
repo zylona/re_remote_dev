@@ -7,7 +7,7 @@
 
 用一次受控运行，把一台可 SSH 登录的 Linux 主机恢复成现代远程开发环境：zsh、Antidote、Powerlevel10k、mise、fzf、zoxide、Zellij、Neovim 和 Codex CLI。项目采用 Ansible-first 设计，支持无外网目标机的临时 HTTP 代理，并保持普通 `ssh user@host` 的原生连接体验。
 
-> 当前发布版本：`v0.1.16`。已在 Debian 13、Arch/Omarchy 和 openEuler 24.03 上完成真实回归，包含多窗口、多用户共享隧道、断线恢复和 30 分钟连续观察。默认不安装远端常驻 Agent、不开放公网端口、不保存密码或 API Token。
+> 当前发布版本：`v0.1.17`。已在 Debian 13、Arch/Omarchy 和 openEuler 24.03 上完成真实回归，包含多窗口、多用户共享隧道、断线恢复和 30 分钟连续观察。默认不安装远端常驻 Agent、不开放公网端口、不保存密码或 API Token。
 
 ## 特性
 
@@ -119,7 +119,7 @@ tssh user@host
 tssh -i ~/.ssh/id_ed25519 user@host
 ```
 
-连接期间每 30 秒自动续租，退出或异常断线后由编排器释放 lease；同一 endpoint 的多用户、多
+连接期间默认每 1 秒自动续租，退出或异常断线后由编排器释放 lease；同一 endpoint 的多用户、多
 窗口共享 4227 隧道，最后一个会话退出后才清理转发。纯密码登录仍建议直接使用普通 SSH，因
 为密码不会被保存，无法支持无人值守接管。
 
@@ -129,6 +129,10 @@ Release 制品安装后会额外提供 `tssh` 命令：
 tssh user@host
 tssh user@host -i ~/.ssh/id_ed25519
 tssh --version
+tssh list
+tssh persist user@host
+tssh stop user@host
+tssh cleanup
 ```
 
 `tssh` 与普通 `ssh` 使用相同的终端体验，但会先申请项目 Lease，并自动建立或复用远端
@@ -137,6 +141,14 @@ tssh --version
 解析当前 SSH 配置中的 `IdentityFile`；`-i` 可覆盖该结果。`tssh` 依赖 SSH 密钥或 ssh-agent；
 密码登录请继续使用普通 `ssh`。
 
+`tssh list` 会按目标主机分组显示 SSH 端口、代理状态、会话数以及实际管理的转发端口：
+
+- 目标 `127.0.0.1:4227` ← 本机 `127.0.0.1:4227`：HTTP 代理；
+- 目标 `127.0.0.1:4228` ← 本机 `127.0.0.1:4230`：Codex OAuth/事件回调。
+
+其中“目标”是远程设备上的监听端口，“本机”是执行 `tssh` 的电脑端口；多个目标会分别列出，
+不会把不同主机的端口混在一行。
+
 Codex 登录要求本机 `127.0.0.1:1455` 空闲，因为 OpenAI OAuth 的回调地址固定为
 `http://localhost:1455/auth/callback`。如果该端口被 VS Code 或其他程序占用，编排器会在
 状态中报告 `PORT_CONFLICT`，不会终止占用端口的程序；关闭占用程序后重新启动 `codex` 即可。
@@ -144,14 +156,35 @@ Codex 登录要求本机 `127.0.0.1:1455` 空闲，因为 OpenAI OAuth 的回调
 代理功能优先使用 SSH 密钥或 ssh-agent 认证；同一设备的多用户和多窗口共享一个 endpoint
 隧道，不会重复占用远端 4227。纯密码认证保持原生 SSH 路径，不参与无人值守自动接管。
 
-也可以从 [v0.1.16 Release](https://github.com/zylona/re_remote_dev/releases/tag/v0.1.16) 下载完整本地集成制品。生产环境建议固定版本并校验 SHA256：
+需要立即停止本机所有 tssh 代理隧道并清空 lease 时执行 `tssh cleanup`。该命令不会杀掉普通
+SSH 或 VS Code 连接；已经运行的 tssh 终端也不会被强制关闭，但其代理 lease 会被清除，重新
+执行 tssh 即可恢复代理。
+
+`tssh persist user@host` 只保持远端 `4227` HTTP 代理，不启动 Codex 专用的 `4228→4230`
+回调通道；需要 Codex 登录或回调时，使用普通的 `tssh user@host` 会话。
+
+如果终端被强制关闭、网络突然中断或 shell 没有机会执行退出清理，编排器会保留 lease 最多约
+3 秒用于容忍瞬时断线；需要立即释放远端 4227/4228 时，执行 `tssh cleanup`。
+
+回收参数可以由用户调整，配置文件为 `~/.config/tssh/config`：
+
+```ini
+[lease]
+heartbeat_interval = 1
+lease_ttl = 3
+```
+
+`lease_ttl` 必须大于两个 heartbeat 间隔；无效值会回退到默认值。该配置只包含时序参数，
+不保存密码、私钥或代理凭据。
+
+也可以从 [v0.1.17 Release](https://github.com/zylona/re_remote_dev/releases/tag/v0.1.17) 下载完整本地集成制品。生产环境建议固定版本并校验 SHA256：
 
 ```bash
-curl -fLO https://github.com/zylona/re_remote_dev/releases/download/v0.1.16/remote-dev-orchestrator-v0.1.16-linux.tar.gz
-curl -fLO https://github.com/zylona/re_remote_dev/releases/download/v0.1.16/remote-dev-orchestrator-v0.1.16-linux.tar.gz.sha256
-sha256sum -c remote-dev-orchestrator-v0.1.16-linux.tar.gz.sha256
-tar -xzf remote-dev-orchestrator-v0.1.16-linux.tar.gz
-./remote-dev-orchestrator-v0.1.16-linux/install
+curl -fLO https://github.com/zylona/re_remote_dev/releases/download/v0.1.17/remote-dev-orchestrator-v0.1.17-linux.tar.gz
+curl -fLO https://github.com/zylona/re_remote_dev/releases/download/v0.1.17/remote-dev-orchestrator-v0.1.17-linux.tar.gz.sha256
+sha256sum -c remote-dev-orchestrator-v0.1.17-linux.tar.gz.sha256
+tar -xzf remote-dev-orchestrator-v0.1.17-linux.tar.gz
+./remote-dev-orchestrator-v0.1.17-linux/install
 ```
 
 安装器会迁移并备份旧版 `# >>> remote-dev ssh integration >>>` 标记区块，但默认不再写入全局
@@ -161,7 +194,7 @@ tar -xzf remote-dev-orchestrator-v0.1.16-linux.tar.gz
 已安装版本可以使用制品内的 `rollback VERSION` 回滚：
 
 ```bash
-./remote-dev-orchestrator-v0.1.16-linux/rollback 0.1.10
+./remote-dev-orchestrator-v0.1.17-linux/rollback 0.1.10
 ```
 
 VS Code Remote‑SSH 默认直接使用普通的 `~/.ssh/config`。安装器不会生成或维护

@@ -10,7 +10,7 @@ trap 'rm -rf "$stage_dir"' EXIT
 pkg="remote-dev-orchestrator-v${version}-linux"
 mkdir -p "$stage_dir/$pkg/lib/remote_dev" "$stage_dir/$pkg/bin" "$dist_dir"
 cp -R "$root_dir/src/remote_dev/orchestrator" "$stage_dir/$pkg/lib/remote_dev/"
-cp "$root_dir/src/remote_dev/ssh_integration.py" "$root_dir/src/remote_dev/tssh.py" "$stage_dir/$pkg/lib/remote_dev/"
+cp "$root_dir/src/remote_dev/ssh_integration.py" "$root_dir/src/remote_dev/tssh.py" "$root_dir/src/remote_dev/lease_config.py" "$stage_dir/$pkg/lib/remote_dev/"
 cp "$root_dir/scripts/remote_dev_ssh_hook.py" "$stage_dir/$pkg/bin/remote-dev-ssh-hook"
 find "$stage_dir/$pkg" -type d -name '__pycache__' -prune -exec rm -rf {} +
 find "$stage_dir/$pkg" -type f -name '*.pyc' -delete

@@ -11,8 +11,8 @@ from .proxy_persistent import ensure, remove
 class EndpointForwardManager:
     """Start at most one systemd proxy unit for an endpoint owner."""
 
-    def start(self, endpoint: EndpointKey, user: str, identity_file: Path) -> None:
-        ensure(TargetKey(endpoint.hostname, endpoint.port, user), identity_file)
+    def start(self, endpoint: EndpointKey, user: str, identity_file: Path, *, event_forward: bool = True) -> None:
+        ensure(TargetKey(endpoint.hostname, endpoint.port, user), identity_file, event_forward=event_forward)
 
     def stop(self, endpoint: EndpointKey, user: str | None = None) -> None:
         # ``remove`` derives the endpoint-scoped unit name, so the user is not

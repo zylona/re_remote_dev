@@ -49,6 +49,11 @@ Release 制品提供 `tssh` 作为独立的 SSH 入口。它不替换普通 `ssh
 `127.0.0.1:4228` Codex 事件通道转发到本机 `127.0.0.1:4230`。同一设备、不同用户或多个窗口
 共享一个 endpoint forwarder；最后一个 lease 释放后才清理隧道。
 
+Endpoint forwarder 是按 lease 创建的临时 user unit，不加入 `default.target`，也不会在没有
+`tssh` 会话时自启动。编排器启动时会清理上一进程遗留的 `remote-dev-proxy-*` unit；首个
+lease 启动隧道，最后一个 lease 释放时执行 `disable --now` 并删除 unit。owner 只是负责创建
+或接管隧道的候选凭据，owner 窗口退出但仍有其他 lease 时不会关闭健康隧道。
+
 `tssh user@host` 会调用 `ssh -G user@host` 读取 OpenSSH 最终配置，自动选择可用的
 `IdentityFile`；也可以用 `-i` 显式覆盖。密码不会保存，密码登录请使用原生 `ssh`。当远端已部署
 Codex shim 时，Codex 启动和 OAuth URL 事件会经 4228 到达本地编排器，由编排器临时建立
@@ -97,8 +102,8 @@ Codex 安装由 `roles/codex` 提供一个薄包装命令：真实二进制位�
 
 `tssh user@host` 会向本地编排器申请随机 `session_id` lease，然后启动原生 SSH。编排器为
 lease 记录 endpoint、候选用户、密钥指纹和最后 heartbeat，不记录密码或完整
-命令行。连接进程每 30 秒发送一次 heartbeat；重复 acquire 使用同一 `session_id` 幂等返回，
-会话退出调用 `release`，超过 120 秒未 heartbeat 的孤儿 lease 会被自动释放。只有 endpoint
+命令行。连接进程默认每 1 秒发送一次 heartbeat；重复 acquire 使用同一 `session_id` 幂等返回，
+会话退出调用 `release`，超过 3 秒未 heartbeat 的孤儿 lease 会被自动释放。只有 endpoint
 的最后一个 lease 释放时，才允许停止该 endpoint 的 4227 forwarder；其他用户仍在线时不会
 误删共享隧道。
 

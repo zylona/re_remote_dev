@@ -25,6 +25,13 @@ mv "$staging" "$target"
 next_link="$base/.current.$$"
 ln -s "$target" "$next_link"
 mv -Tf "$next_link" "$base/current"
+# A release install is an upgrade, not a side-by-side deployment.  Once the
+# new current link is in place, remove older managed payloads so stale Python
+# modules and obsolete entrypoints cannot be selected by accident.  Set
+# TSSH_KEEP_OLD_VERSIONS=1 when an operator explicitly needs local rollback.
+if [ "${TSSH_KEEP_OLD_VERSIONS:-0}" != "1" ]; then
+  find "$base/versions" -mindepth 1 -maxdepth 1 ! -path "$target" -exec rm -rf -- {} +
+fi
 bin_dir="${XDG_BIN_HOME:-$HOME/.local/bin}"
 mkdir -p "$bin_dir"
 ln -sfn "$base/current/bin/tssh-server" "$bin_dir/tssh-server"
@@ -48,4 +55,4 @@ shopt -u nullglob
 systemctl --user enable --now tssh.socket
 systemctl --user restart tssh.service
 PYTHONPATH="$base/current/lib${PYTHONPATH:+:$PYTHONPATH}" "$python_bin" -c 'from remote_dev.ssh_integration import install; print(f"Legacy SSH integration migrated: {install()}")'
-echo "tssh $version installed; service enabled and SSH config migrated"
+echo "tssh $version installed; older managed versions removed (set TSSH_KEEP_OLD_VERSIONS=1 to retain them)"
