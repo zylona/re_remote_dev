@@ -235,7 +235,8 @@ def _put(raw: list[str]) -> int:
     print(f"目标：{user}@{host}:{args.port}")
     print("远程目录：~/Uploads/remote-dev")
     try:
-        remote_path = put_file(UploadConnection(host, args.port, user, identity), local_path)
+        control_path = Path(os.environ.get("XDG_RUNTIME_DIR", "/tmp")) / f"tssh-put-{os.getuid()}-{uuid.uuid4().hex[:10]}"
+        remote_path = put_file(UploadConnection(host, args.port, user, identity, str(control_path)), local_path)
     except (UploadError, OSError, subprocess.SubprocessError) as exc:
         print(f"tssh put: {exc}", file=sys.stderr)
         return 1

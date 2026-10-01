@@ -6,6 +6,7 @@ import os
 import shlex
 import subprocess
 import time
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -19,6 +20,7 @@ class UploadConnection:
     port: int
     user: str
     identity_file: str | None = None
+    control_path: str | None = None
 
     @property
     def destination(self) -> str:
@@ -38,6 +40,11 @@ def _ssh_base(connection: UploadConnection, executable: str) -> list[str]:
     command = [executable, "-o", "BatchMode=yes", "-o", "ConnectTimeout=8"]
     if connection.identity_file:
         command.extend(["-i", connection.identity_file])
+    if connection.control_path:
+        command.extend([
+            "-o", f"ControlPath={connection.control_path}",
+            "-o", "ControlMaster=auto", "-o", "ControlPersist=60",
+        ])
     if connection.port != 22:
         command.extend(["-p" if executable == "ssh" else "-P", str(connection.port)])
     return command
@@ -76,45 +83,57 @@ def put_file(connection: UploadConnection, local_path: Path, *, progress: bool =
     if not local_path.is_file():
         raise UploadError(f"本地文件不存在或不是普通文件：{local_path}")
     local_path = local_path.resolve()
-    root = _remote_root(connection)
-    remote_path = f"{root}/{local_path.name}"
-    remote_partial = f"{root}/.{local_path.name}.tssh-part"
-    total = local_path.stat().st_size
-    started = time.monotonic()
-    resume_from = _remote_size(connection, remote_partial)
-    put_flags = "-ap" if resume_from > 0 else "-p"
-    command = _ssh_base(connection, "sftp") + ["-b", "-", connection.destination]
-    batch = (
-        f"put {put_flags} {_sftp_quote(str(local_path))} {_sftp_quote(f'{UPLOAD_ROOT}/.{local_path.name}.tssh-part')}\n"
-        f"rename {_sftp_quote(f'{UPLOAD_ROOT}/.{local_path.name}.tssh-part')} {_sftp_quote(f'{UPLOAD_ROOT}/{local_path.name}')}\n"
-    )
-    process = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-    if process.stdin is None:
-        raise UploadError("无法向 SFTP 发送上传请求")
-    process.stdin.write(batch)
-    process.stdin.close()
-    process.stdin = None
-    last_print = 0.0
-    deadline = started + 3600
-    while process.poll() is None:
-        now = time.monotonic()
-        if now > deadline:
-            process.terminate()
-            raise UploadError("SFTP 上传超时（超过 1 小时）")
-        done = _remote_size(connection, remote_partial)
-        if progress and now - last_print >= 0.5:
-            elapsed = max(now - started, 0.001)
-            speed = done / elapsed
-            ratio = min(1.0, done / total) if total else 1.0
-            eta = (total - done) / speed if speed > 0 and total else None
-            percent = f"{ratio * 100:5.1f}%"
-            eta_text = f" ETA {eta:.1f}s" if eta is not None else ""
-            print(f"\rput: [{percent}] {done}/{total} bytes {speed / 1024 / 1024:.1f} MiB/s{eta_text}\x1b[K", end="", flush=True)
-            last_print = now
-        time.sleep(0.2)
-    stdout, stderr = process.communicate(timeout=5)
-    if process.returncode:
-        raise UploadError((stderr or stdout or "SFTP 上传失败").strip())
-    if progress:
-        print("\rput: 上传完成\x1b[K")
-    return remote_path
+    control_path = connection.control_path
+    master_started = False
+    if control_path:
+        master = _ssh_base(connection, "ssh") + ["-M", "-S", control_path, "-fnNT", connection.destination]
+        result = subprocess.run(master, check=False, capture_output=True, text=True, timeout=20)
+        master_started = result.returncode == 0
+        if not master_started:
+            connection = UploadConnection(connection.hostname, connection.port, connection.user, connection.identity_file)
+    try:
+        root = _remote_root(connection)
+        remote_path = f"{root}/{local_path.name}"
+        remote_partial = f"{root}/.{local_path.name}.tssh-part"
+        total = local_path.stat().st_size
+        started = time.monotonic()
+        resume_from = _remote_size(connection, remote_partial)
+        put_flags = "-ap" if resume_from > 0 else "-p"
+        command = _ssh_base(connection, "sftp") + ["-b", "-", connection.destination]
+        batch = (
+            f"put {put_flags} {_sftp_quote(str(local_path))} {_sftp_quote(f'{UPLOAD_ROOT}/.{local_path.name}.tssh-part')}\n"
+            f"rename {_sftp_quote(f'{UPLOAD_ROOT}/.{local_path.name}.tssh-part')} {_sftp_quote(f'{UPLOAD_ROOT}/{local_path.name}')}\n"
+        )
+        process = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        if process.stdin is None:
+            raise UploadError("无法向 SFTP 发送上传请求")
+        process.stdin.write(batch)
+        process.stdin.close()
+        process.stdin = None
+        last_print = 0.0
+        deadline = started + 3600
+        while process.poll() is None:
+            now = time.monotonic()
+            if now > deadline:
+                process.terminate()
+                raise UploadError("SFTP 上传超时（超过 1 小时）")
+            done = _remote_size(connection, remote_partial)
+            if progress and now - last_print >= 0.5:
+                elapsed = max(now - started, 0.001)
+                speed = done / elapsed
+                ratio = min(1.0, done / total) if total else 1.0
+                eta = (total - done) / speed if speed > 0 and total else None
+                percent = f"{ratio * 100:5.1f}%"
+                eta_text = f" ETA {eta:.1f}s" if eta is not None else ""
+                print(f"\rput: [{percent}] {done}/{total} bytes {speed / 1024 / 1024:.1f} MiB/s{eta_text}\x1b[K", end="", flush=True)
+                last_print = now
+            time.sleep(0.2)
+        stdout, stderr = process.communicate(timeout=5)
+        if process.returncode:
+            raise UploadError((stderr or stdout or "SFTP 上传失败").strip())
+        if progress:
+            print("\rput: 上传完成\x1b[K")
+        return remote_path
+    finally:
+        if master_started and control_path:
+            subprocess.run(["ssh", "-S", control_path, "-O", "exit", connection.destination], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
