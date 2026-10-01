@@ -65,6 +65,12 @@ tssh cleanup # 清理全部会话级代理
 `persist` 只建立远端 `4227` HTTP 代理；`4228→4230` 是 Codex 回调通道，仅由普通交互式
 `tssh user@host` 会话按需启用。
 
+`tssh put` 使用每次请求独立的临时 SSH ControlMaster，目录创建、SFTP 上传和进度查询均
+复用该连接，完成或失败后自动关闭。目标文件统一写入 `~/Uploads/remote-dev/`；存在匹配
+的 `.tssh-part` 时按已有大小续传，成功后原子替换正式文件。上传不使用 4227/4228，也不
+要求远端部署常驻 Agent。它依赖 SSH 配置、ssh-agent 或显式私钥，不保存密码；详细使用边界
+见 [`docs/capabilities/upload.md`](capabilities/upload.md)。
+
 普通会话默认每 1 秒续租；异常断开时，lease 最多保留约 3 秒以容忍瞬时网络抖动；需要立即停止全部会话级
 转发时使用 `tssh cleanup`。`persist` 创建的持久代理不受会话退出影响，必须使用对应的
 `tssh stop user@host` 显式关闭。
