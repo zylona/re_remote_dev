@@ -67,6 +67,8 @@
   register: nvim_ts_cli_probe
   changed_when: false
   failed_when: false
+  environment:
+    PATH: "{{ nvim_install_dir }}:/usr/local/bin:/usr/bin:/bin"
 
 - name: 安装 Treesitter CLI（带超时和代理参数） # noqa command-instead-of-shell
   ansible.builtin.shell:
@@ -95,18 +97,133 @@
   changed_when: nvim_ts_cli_install.rc == 0
   failed_when: false
 
+- name: 映射官方 Treesitter CLI 架构
+  ansible.builtin.set_fact:
+    nvim_treesitter_cli_arch: "{{ nvim_treesitter_cli_arch_map[ansible_facts.architecture] | default('') }}"
+  when: nvim_ts_cli_probe.rc != 0
+
+- name: 拒绝不支持的官方 Treesitter CLI 架构
+  ansible.builtin.assert:
+    that:
+      - nvim_treesitter_cli_arch | length > 0
+    fail_msg: "官方 Tree-sitter CLI 暂不支持目标架构 {{ ansible_facts.architecture }}。"
+  when:
+    - nvim_ts_cli_probe.rc != 0
+    - nvim_treesitter_cli_install.rc | default(1) | int != 0
+
+- name: 创建官方 Treesitter CLI 目录
+  ansible.builtin.file:
+    path: "{{ nvim_treesitter_cli_root }}"
+    state: directory
+    mode: '0755'
+  when:
+    - nvim_ts_cli_probe.rc != 0
+    - nvim_treesitter_cli_install.rc | default(1) | int != 0
+
+- name: 下载官方 Treesitter CLI release
+  ansible.builtin.get_url:
+    url: >-
+      {{ 'https://github.com/tree-sitter/tree-sitter/releases/download/v'
+         ~ nvim_treesitter_cli_version
+         ~ '/tree-sitter-cli-linux-'
+         ~ nvim_treesitter_cli_arch ~ '.zip' }}
+    dest: "{{ ansible_facts.user_dir }}/.cache/tree-sitter-cli-{{ nvim_treesitter_cli_version }}-{{ nvim_treesitter_cli_arch }}.zip"
+    checksum: "sha256:{{ nvim_treesitter_cli_sha256[nvim_treesitter_cli_arch] }}"
+    mode: '0644'
+  environment:
+    http_proxy: "{{ remote_dev_temp_proxy_url | default(omit) }}"
+    https_proxy: "{{ remote_dev_temp_proxy_url | default(omit) }}"
+  when:
+    - nvim_ts_cli_probe.rc != 0
+    - nvim_treesitter_cli_install.rc | default(1) | int != 0
+    - not (tools_offline | default(false) | bool)
+
+- name: 解压官方 Treesitter CLI release
+  ansible.builtin.unarchive:
+    src: "{{ ansible_facts.user_dir }}/.cache/tree-sitter-cli-{{ nvim_treesitter_cli_version }}-{{ nvim_treesitter_cli_arch }}.zip"
+    dest: "{{ nvim_treesitter_cli_root }}"
+    remote_src: true
+    creates: "{{ nvim_treesitter_cli_root }}/tree-sitter"
+  when:
+    - nvim_ts_cli_probe.rc != 0
+    - nvim_treesitter_cli_install.rc | default(1) | int != 0
+    - not (tools_offline | default(false) | bool)
+
+- name: 链接官方 Treesitter CLI 到用户 PATH
+  ansible.builtin.file:
+    src: "{{ nvim_treesitter_cli_root }}/tree-sitter"
+    dest: "{{ nvim_install_dir }}/tree-sitter"
+    state: link
+    force: true
+  when:
+    - nvim_ts_cli_probe.rc != 0
+    - nvim_treesitter_cli_install.rc | default(1) | int != 0
+    - not (tools_offline | default(false) | bool)
+
 - name: 验证 Treesitter CLI 安装结果
   ansible.builtin.command: tree-sitter --version
   register: nvim_ts_cli_verify
   changed_when: false
   failed_when: false
+  environment:
+    PATH: "{{ nvim_install_dir }}:/usr/local/bin:/usr/bin:/bin"
 
-- name: Treesitter CLI 缺失时给出非阻断提示
-  ansible.builtin.debug:
-    msg: >-
-      当前发行版未提供可用的 tree-sitter CLI；Neovim/nvim-treesitter 仍可使用其内置解析器构建流程。
-      如需 CLI，请按发行版文档单独安装 tree-sitter-cli。
-  when: nvim_ts_cli_verify.rc != 0
+- name: 判断是否需要兼容版 Treesitter CLI
+  ansible.builtin.set_fact:
+    nvim_ts_cli_needs_legacy: >-
+      {{ nvim_ts_cli_verify.rc != 0 and
+         (nvim_treesitter_cli_arch | default('')) == 'x64' }}
+
+- name: 下载兼容版 Treesitter CLI（glibc 兼容）
+  ansible.builtin.get_url:
+    url: >-
+      https://github.com/tree-sitter/tree-sitter/releases/download/v{{ nvim_treesitter_cli_legacy_version }}/tree-sitter-linux-x64.gz
+    dest: "{{ ansible_facts.user_dir }}/.cache/tree-sitter-cli-{{ nvim_treesitter_cli_legacy_version }}-x64.gz"
+    checksum: "sha256:{{ nvim_treesitter_cli_legacy_sha256.x64 }}"
+    mode: '0644'
+  environment:
+    http_proxy: "{{ remote_dev_temp_proxy_url | default(omit) }}"
+    https_proxy: "{{ remote_dev_temp_proxy_url | default(omit) }}"
+  when:
+    - nvim_ts_cli_needs_legacy | default(false) | bool
+    - not (tools_offline | default(false) | bool)
+
+- name: 解压兼容版 Treesitter CLI
+  ansible.builtin.shell: >-
+    set -o pipefail &&
+    gzip -dc
+    {{ ansible_facts.user_dir }}/.cache/tree-sitter-cli-{{ nvim_treesitter_cli_legacy_version }}-x64.gz
+    > {{ nvim_treesitter_cli_root }}/tree-sitter.legacy &&
+    install -m 0755 {{ nvim_treesitter_cli_root }}/tree-sitter.legacy
+    {{ nvim_treesitter_cli_root }}/tree-sitter
+  args:
+    executable: /bin/sh
+  register: nvim_ts_cli_legacy_extract
+  changed_when: nvim_ts_cli_legacy_extract.rc == 0
+  failed_when: nvim_ts_cli_legacy_extract.rc != 0
+  when:
+    - nvim_ts_cli_needs_legacy | default(false) | bool
+    - not (tools_offline | default(false) | bool)
+
+- name: 重新验证兼容版 Treesitter CLI
+  ansible.builtin.command: tree-sitter --version
+  register: nvim_ts_cli_verify_legacy
+  changed_when: false
+  failed_when: false
+  environment:
+    PATH: "{{ nvim_install_dir }}:/usr/local/bin:/usr/bin:/bin"
+  when: nvim_ts_cli_needs_legacy | default(false) | bool
+
+- name: Treesitter CLI 缺失时停止恢复
+  ansible.builtin.assert:
+    that:
+      - >-
+        nvim_ts_cli_verify.rc == 0 or
+        (nvim_ts_cli_verify_legacy.rc | default(1) | int) == 0
+    fail_msg: >-
+      无法安装 tree-sitter CLI；nvim-treesitter main 需要它编译 parser。
+      当前版本可能与目标机 glibc 不兼容；请检查本轮代理、GitHub release 下载和目标架构后重新执行 setup。
+  when: nvim_install_treesitter_parsers
 
 - name: 创建官方 Neovim 用户目录
   ansible.builtin.file:
@@ -277,14 +394,11 @@
     XDG_CONFIG_HOME: "{{ ansible_facts.user_dir }}/.config"
     http_proxy: "{{ remote_dev_temp_proxy_url | default(omit) }}"
     https_proxy: "{{ remote_dev_temp_proxy_url | default(omit) }}"
+    HTTP_PROXY: "{{ remote_dev_temp_proxy_url | default(omit) }}"
+    HTTPS_PROXY: "{{ remote_dev_temp_proxy_url | default(omit) }}"
     PATH: "{{ nvim_install_dir }}:/usr/local/bin:/usr/bin:/bin"
 
 - name: 按锁文件同步 LazyVim 插件
-  ansible.builtin.stat:
-    path: "{{ nvim_data_dir }}/lazy/lazy.nvim"
-  register: nvim_lazy_stat
-
-- name: 首次安装时按锁文件同步 LazyVim 插件
   ansible.builtin.command:
     argv: [timeout, 300, nvim, --headless, "+Lazy! sync", "+qa!"]
   register: nvim_plugin_sync
@@ -295,10 +409,11 @@
     XDG_CONFIG_HOME: "{{ ansible_facts.user_dir }}/.config"
     http_proxy: "{{ remote_dev_temp_proxy_url | default(omit) }}"
     https_proxy: "{{ remote_dev_temp_proxy_url | default(omit) }}"
+    HTTP_PROXY: "{{ remote_dev_temp_proxy_url | default(omit) }}"
+    HTTPS_PROXY: "{{ remote_dev_temp_proxy_url | default(omit) }}"
     PATH: "{{ nvim_install_dir }}:/usr/local/bin:/usr/bin:/bin"
   when:
     - nvim_sync_plugins
-    - not nvim_lazy_stat.stat.exists
     - not (tools_offline | default(false) | bool)
 
 - name: 预安装 LazyVim 默认 Treesitter parsers
@@ -312,9 +427,8 @@
       - "{{ nvim_config_dir }}/init.lua"
       - >-
         +lua local ts=require('nvim-treesitter'); local langs={{ nvim_treesitter_languages | to_json }};
-        local function parser_count() return #vim.fn.glob(vim.fn.stdpath('data') .. '/site/parser/*.so', true, true) end;
-        ts.install(langs); vim.wait(840000, function()
-        return parser_count() >= {{ nvim_treesitter_languages | length }} end, 1000)
+        local task=ts.install(langs, {summary=true, max_jobs=4});
+        if not task:wait(840000) then vim.cmd('cquit 1') end
       - +qa!
   register: nvim_treesitter_install
   changed_when: false
@@ -324,6 +438,8 @@
     XDG_CONFIG_HOME: "{{ ansible_facts.user_dir }}/.config"
     http_proxy: "{{ remote_dev_temp_proxy_url | default(omit) }}"
     https_proxy: "{{ remote_dev_temp_proxy_url | default(omit) }}"
+    HTTP_PROXY: "{{ remote_dev_temp_proxy_url | default(omit) }}"
+    HTTPS_PROXY: "{{ remote_dev_temp_proxy_url | default(omit) }}"
     PATH: "{{ nvim_install_dir }}:/usr/local/bin:/usr/bin:/bin"
   when:
     - nvim_install_treesitter_parsers
@@ -336,8 +452,14 @@
       - sh
       - -c
       - >-
-        count=$(find "{{ nvim_data_dir }}/site/parser" -maxdepth 1 -type f -name '*.so' 2>/dev/null | wc -l);
-        test "$count" -ge "{{ nvim_treesitter_languages | length }}"
+        missing="";
+        for lang in {{ nvim_treesitter_languages | map('quote') | join(' ') }}; do
+          test -f "{{ nvim_data_dir }}/site/parser/${lang}.so" || missing="$missing ${lang}";
+        done;
+        if test -n "$missing"; then
+          echo "missing:$missing";
+          exit 1;
+        fi
   register: nvim_treesitter_verify
   changed_when: false
   failed_when: false
@@ -346,13 +468,15 @@
     XDG_CONFIG_HOME: "{{ ansible_facts.user_dir }}/.config"
     http_proxy: "{{ remote_dev_temp_proxy_url | default(omit) }}"
     https_proxy: "{{ remote_dev_temp_proxy_url | default(omit) }}"
+    HTTP_PROXY: "{{ remote_dev_temp_proxy_url | default(omit) }}"
+    HTTPS_PROXY: "{{ remote_dev_temp_proxy_url | default(omit) }}"
     PATH: "{{ nvim_install_dir }}:/usr/local/bin:/usr/bin:/bin"
   when:
     - nvim_install_treesitter_parsers
     - nvim_sync_plugins
     - not (tools_offline | default(false) | bool)
 
-- name: Treesitter parsers 未全部完成时给出非阻断提示
+- name: 输出 Treesitter parser 缺失诊断
   ansible.builtin.debug:
     msg: >-
       Treesitter 解析器尚未全部预安装（当前目录中的 parser 数量不足目标值）。
@@ -360,3 +484,17 @@
   when:
     - nvim_treesitter_verify is defined
     - nvim_treesitter_verify.rc | default(0) | int != 0
+
+- name: Treesitter 必需 parser 缺失时停止恢复
+  ansible.builtin.assert:
+    that:
+      - nvim_treesitter_verify.rc | default(1) | int == 0
+    fail_msg: >-
+      Treesitter parser 未完整安装（需要 {{ nvim_treesitter_languages | length }} 个）。
+      请确认本轮 tssh 会话继承了 HTTP_PROXY/HTTPS_PROXY，并查看上方 nvim-treesitter
+      下载或编译错误；修复代理后重新执行 setup。Nvim 不会把未完成安装延迟到启动阶段。
+      诊断：{{ nvim_treesitter_verify.stdout | default('无额外输出') | trim }}
+  when:
+    - nvim_install_treesitter_parsers
+    - nvim_sync_plugins
+    - not (tools_offline | default(false) | bool)

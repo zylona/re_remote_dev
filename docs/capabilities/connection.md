@@ -23,6 +23,9 @@
 - tmux 是 fallback 组件，必须由用户预先安装；项目只部署其用户级配置，不负责跨发行版安装。
 - 当探测到 TCP forwarding 被禁用且代理模式为 `required`/自动启用时，脚本创建 `/etc/ssh/sshd_config.d/99-remote-dev-forwarding.conf`，写入 `AllowTcpForwarding yes`，同时支持代理 `-R 4227` 和临时 Codex OAuth 回调 `-L 1455`；先执行 `sshd -t` 校验，再 reload sshd；失败时恢复备份并报告 `FORWARDING_DISABLED`。
 - 普通 SSH 会话不再自动配置任何转发。远端 `rd-help proxy` 根据 `SSH_CONNECTION` 实时打印本机一次性后台 `ssh -fNT -R 4227...` 命令，可被同一主机的多个会话复用；`rd-help codex` 另行打印一次性的 OAuth `-L 1455` 命令。
+- `tssh user@host` 会把本轮已建立的 4227 代理以环境变量注入远端登录 shell（同时设置大小写两套
+  `HTTP_PROXY/HTTPS_PROXY`），因此 Nvim、Git、Treesitter 等子进程直接继承代理；这不写入远端
+  配置文件，也不改变普通 `ssh` 或 VS Code Remote-SSH 的行为。
 - 提权流程为交互式：验证目标用户存在 sudo 且可通过 `--ask-become-pass` 提权。sudo 不存在或不可用时，明确列出缺失能力并停止。密码只驻留内存。
 
 ## 运行时契约

@@ -145,7 +145,12 @@
       # Proxy forwarding is an on-demand background tunnel. Only export proxy
       # variables when the shared remote listener is actually present.
       if [[ -o interactive ]]; then
-      if command -v ss >/dev/null 2>&1 && timeout 1 ss -ltn 2>/dev/null | grep -Eq ':{{ user_shell_proxy_port }}([[:space:]]|$)'; then
+      if [[ -n "${REMOTE_DEV_TSSH_PROXY_PORT:-}" ]]; then
+          export http_proxy="http://127.0.0.1:${REMOTE_DEV_TSSH_PROXY_PORT}"
+          export https_proxy="http://127.0.0.1:${REMOTE_DEV_TSSH_PROXY_PORT}"
+          export HTTP_PROXY="$http_proxy" HTTPS_PROXY="$https_proxy"
+          export no_proxy="127.0.0.1,localhost" NO_PROXY="$no_proxy"
+      elif command -v ss >/dev/null 2>&1 && timeout 1 ss -ltn 2>/dev/null | grep -Eq ':{{ user_shell_proxy_port }}([[:space:]]|$)'; then
           export http_proxy="http://127.0.0.1:{{ user_shell_proxy_port }}"
           export https_proxy="http://127.0.0.1:{{ user_shell_proxy_port }}"
           export HTTP_PROXY="$http_proxy" HTTPS_PROXY="$https_proxy"

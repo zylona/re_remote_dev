@@ -47,6 +47,9 @@ def test_cache_layout_isolated_by_endpoint_and_safe_from_path_traversal(tmp_path
     assert first != second
     assert first.is_relative_to(tmp_path / "downloads")
     assert ".." not in first.parts
+    assert first.parent == tmp_path / "downloads" / endpoint.digest()
+    assert first.name.startswith(f"{path_digest(remote_path)[:16]}-")
+    assert "srv" not in first.parts
     assert path_digest(remote_path) == path_digest(remote_path)
     assert safe_basename(remote_path) == "report.md"
 

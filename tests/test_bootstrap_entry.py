@@ -32,3 +32,10 @@ def test_local_service_install_decline_is_standalone() -> None:
     assert "本地编排器服务安装" in result.output
     assert "已取消：本地服务未安装。" in result.output
     assert "远程恢复" not in result.output
+
+
+def test_runtime_bootstrap_preserves_global_ssh_config_for_keyless_key_mode():
+    playbook = Path("playbooks/plays/05_bootstrap_runtime.yml").read_text(encoding="utf-8")
+    assert "default('', true)" in playbook
+    assert "-F/dev/null" in playbook
+    assert "remote_dev.ssh_private_key_file" in playbook

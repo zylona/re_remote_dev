@@ -13,6 +13,45 @@ def _request(request_id: str = "request") -> PreviewRequest:
     return PreviewRequest("get", "/workspace/report.md", "endpoint", "session", "nonce", request_id)
 
 
+class _FakeStdin:
+    def __init__(self, owner):
+        self.owner = owner
+
+    def write(self, value: str) -> None:
+        self.owner.batch = value
+
+    def close(self) -> None:
+        local = Path(shlex.split(self.owner.batch)[-1])
+        local.write_bytes(b"hello")
+
+
+class _FakePopen:
+    def __init__(self, command, **kwargs):
+        self.command = command
+        self.returncode = None
+        self.batch = ""
+        self.stdin = _FakeStdin(self)
+        self.stdout = None
+        self.stderr = None
+
+    def poll(self):
+        self.returncode = 0
+        return self.returncode
+
+    def wait(self, **kwargs):
+        self.returncode = 0
+        return self.returncode
+
+    def communicate(self, **kwargs):
+        return "", ""
+
+    def terminate(self):
+        self.returncode = 1
+
+    def kill(self):
+        self.returncode = 1
+
+
 def test_download_manager_downloads_atomically_and_reuses_metadata(monkeypatch, tmp_path: Path):
     calls: list[list[str]] = []
 
@@ -26,6 +65,7 @@ def test_download_manager_downloads_atomically_and_reuses_metadata(monkeypatch, 
         return SimpleNamespace(returncode=0, stdout="", stderr="")
 
     monkeypatch.setattr(subprocess, "run", fake_run)
+    monkeypatch.setattr(subprocess, "Popen", _FakePopen)
     manager = DownloadManager(
         EndpointConnection("host", 22, "alice", "/tmp/key"),
         CacheLayout(tmp_path / "cache", tmp_path / "downloads"),
@@ -60,6 +100,7 @@ def test_download_manager_merges_inflight_requests(monkeypatch, tmp_path: Path):
         return SimpleNamespace(returncode=0, stdout="", stderr="")
 
     monkeypatch.setattr(subprocess, "run", fake_run)
+    monkeypatch.setattr(subprocess, "Popen", _FakePopen)
     manager = DownloadManager(
         EndpointConnection("host", 22, "alice", "/tmp/key"),
         CacheLayout(tmp_path / "cache", tmp_path / "downloads"),

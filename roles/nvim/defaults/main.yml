@@ -2,6 +2,24 @@
 nvim_package_name: neovim
 nvim_compiler_package: build-essential
 nvim_treesitter_cli_package: tree-sitter-cli
+nvim_treesitter_cli_version: "0.26.13"
+nvim_treesitter_cli_arch_map:
+  x86_64: x64
+  amd64: x64
+  aarch64: arm64
+  arm64: arm64
+  armv7l: arm
+  armv6l: arm
+  ppc64le: powerpc64
+nvim_treesitter_cli_sha256:
+  x64: 1b781c0dc1dfefea44b5db2ec2a58440fe9d006856c3f5b3fd9a17119d1138a2
+  arm64: 6260b621bf5ab87027dfb463bf955504ef32cdcda62b81f28447753e48c83a62
+  arm: 58d85ff1572b02194a3af7017dec02e17aa670ba07e54235d040f063babbfdba
+  powerpc64: b51b3075af2febf3d4a8accdadf5560b6e1fc85ae74da4a29252c71f938e4f32
+nvim_treesitter_cli_legacy_version: "0.24.7"
+nvim_treesitter_cli_legacy_sha256:
+  x64: 628fa0e1c4d78b5d4f7de64b6ab42fc050e3bee14cb92a076beb82d762d76d69
+nvim_treesitter_cli_root: "{{ ansible_facts.user_dir }}/.local/share/remote-dev/tree-sitter"
 nvim_min_version: "0.9.0"
 nvim_release_version: "0.11.3"
 nvim_release_arch: "x86_64"

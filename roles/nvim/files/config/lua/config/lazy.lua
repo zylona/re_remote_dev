@@ -6,10 +6,11 @@ if not (vim.uv or vim.loop).fs_stat(lazypath) then
     vim.api.nvim_echo({
       { "Failed to clone lazy.nvim:\n", "ErrorMsg" },
       { out, "WarningMsg" },
-      { "\nPress any key to exit..." },
+      { "\nRun the remote-dev setup again after fixing network access." },
     }, true, {})
-    vim.fn.getchar()
-    os.exit(1)
+    -- Keep a usable plain Neovim session when the first bootstrap cannot
+    -- reach GitHub.  The Ansible sync step remains the authoritative retry.
+    return
   end
 end
 vim.opt.rtp:prepend(lazypath)
@@ -30,11 +31,13 @@ require("lazy").setup({
     version = false, -- always use the latest git commit
     -- version = "*", -- try installing the latest stable version for plugins that support semver
   },
-  install = { colorscheme = { "tokyonight", "habamax" } },
+  install = { missing = false, colorscheme = { "tokyonight", "habamax" } },
   checker = {
-    enabled = true, -- check for plugin updates periodically
+    -- Plugins are restored by Ansible from lazy-lock.json.  Avoid contacting
+    -- GitHub during every interactive Neovim startup.
+    enabled = false,
     notify = false, -- notify on update
-  }, -- automatically check for plugin updates
+  },
   performance = {
     rtp = {
       -- disable some rtp plugins

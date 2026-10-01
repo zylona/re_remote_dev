@@ -3,6 +3,8 @@
   hosts: remote_dev_targets
   gather_facts: false
   vars:
-    ansible_ssh_common_args: "-F/dev/null"
+    # 显式私钥/密码模式使用隔离 SSH 配置；私钥留空时必须保留用户的
+    # ~/.ssh/config、IdentityFile 和 ssh-agent。
+    ansible_ssh_common_args: "{{ '-F/dev/null' if (remote_dev.ssh_private_key_file | default('', true) | length > 0) else omit }}"
   roles:
     - bootstrap_runtime

@@ -41,7 +41,7 @@ def _detect_become_method(destination: str, identity_file: str) -> str:
     return method
 
 
-def _detect_become_for_setup(destination: str, identity_file: str, auth_password: str | None = None) -> str:
+def _detect_become_for_setup(destination: str, identity_file: str | None, auth_password: str | None = None) -> str:
     """Select sudo when installed and distinguish password-required from denial.
 
     ``sudo -n`` returns non-zero both when a password is needed and when the
@@ -49,8 +49,17 @@ def _detect_become_for_setup(destination: str, identity_file: str, auth_password
     can prompt for the user's sudo password; only an explicit policy denial
     falls back to ``su``.
     """
-    command = ["ssh", "-F", "/dev/null", "-i", str(Path(identity_file).expanduser()), "-o", "ConnectTimeout=8", destination,
-               "sh", "-c", "'if ! command -v sudo >/dev/null 2>&1; then command -v su >/dev/null 2>&1 && echo su || echo unavailable; elif sudo -n true >/dev/null 2> /tmp/remote-dev-sudo-probe; then echo sudo; elif grep -qiE \"not in the sudoers|not allowed\" /tmp/remote-dev-sudo-probe; then command -v su >/dev/null 2>&1 && echo su || echo unavailable; else echo sudo; fi; rm -f /tmp/remote-dev-sudo-probe'"]
+    command = ["ssh"]
+    if identity_file:
+        command.extend(["-F", "/dev/null", "-i", str(Path(identity_file).expanduser())])
+    elif auth_password is not None:
+        # Password mode must not accidentally inherit IdentitiesOnly or other
+        # key-only rules from the user's global SSH config.
+        command.extend(["-F", "/dev/null"])
+    command.extend([
+        "-o", "ConnectTimeout=8", destination,
+        "sh", "-c", "'if ! command -v sudo >/dev/null 2>&1; then command -v su >/dev/null 2>&1 && echo su || echo unavailable; elif sudo -n true >/dev/null 2> /tmp/remote-dev-sudo-probe; then echo sudo; elif grep -qiE \"not in the sudoers|not allowed\" /tmp/remote-dev-sudo-probe; then command -v su >/dev/null 2>&1 && echo su || echo unavailable; else echo sudo; fi; rm -f /tmp/remote-dev-sudo-probe'",
+    ])
     env = os.environ.copy()
     if auth_password is not None:
         command = ["sshpass", "-e", *command]
@@ -335,10 +344,11 @@ def setup() -> None:
     auth = typer.prompt("认证方式（key/password）", default="key").strip().lower()
     if auth not in {"key", "password"}:
         raise typer.BadParameter("认证方式必须是 key 或 password")
-    key = "/dev/null"
+    key: str | None = None
     password: str | None = None
     if auth == "key":
-        key = typer.prompt("私钥路径", default="~/.ssh/id_ed25519")
+        entered_key = typer.prompt("私钥路径（留空使用全局 SSH 配置/ssh-agent）", default="").strip()
+        key = entered_key or None
     else:
         if not __import__("shutil").which("sshpass"):
             raise typer.BadParameter("密码 SSH 需要控制端 sshpass；请先安装后重试")
@@ -374,7 +384,7 @@ def setup() -> None:
     }
     if password is not None:
         data["all"]["children"]["remote_dev_targets"]["hosts"]["interactive"]["ansible_password"] = password
-    else:
+    elif key:
         data["all"]["children"]["remote_dev_targets"]["hosts"]["interactive"]["ansible_ssh_private_key_file"] = key
     yaml = YAML()
     with inventory.open("w", encoding="utf-8") as stream:
@@ -384,11 +394,9 @@ def setup() -> None:
         from .proxy import ProxySettings, ReverseProxyTunnel
         settings = ProxySettings()
         with ReverseProxyTunnel(settings=settings, destination=destination, identity_file=key, auth_password=password) as tunnel:
-            extra = {
-                "ansible_become_method": become_method,
-                "ansible_ssh_common_args": "-F/dev/null",
-                "codex_target_digest": target_digest,
-            }
+            extra = {"ansible_become_method": become_method, "codex_target_digest": target_digest}
+            if key or password is not None:
+                extra["ansible_ssh_common_args"] = "-F/dev/null"
             if tunnel.process:
                 extra["remote_dev_temp_proxy_url"] = tunnel.proxy_url
             if become_method == "sudo":

@@ -123,6 +123,38 @@ def _status() -> int:
     return 0
 
 
+def _downloads_status() -> int:
+    """Show local rget/rdo status files independently of the active PTY."""
+    root = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "tssh" / "rdo"
+    jobs = sorted(root.glob("*/jobs/*.json"), key=lambda path: path.stat().st_mtime, reverse=True) if root.is_dir() else []
+    print("tssh download status")
+    print("─" * 116)
+    print(f"{'STATE':<20} {'PROGRESS':>18} {'SPEED':>12} {'ETA':>10}  {'REMOTE PATH'}")
+    print("─" * 116)
+    if not jobs:
+        print("(no download jobs)")
+    for path in jobs[:30]:
+        try:
+            value = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        done = int(value.get("bytes_done", 0) or 0)
+        total = int(value.get("bytes_total", 0) or 0)
+        progress = f"{done}/{total}" if total else f"{done}/?"
+        speed = float(value.get("speed_bps", 0) or 0)
+        eta = value.get("eta_seconds")
+        speed_text = f"{speed / 1024:.1f} KiB/s" if speed else "—"
+        eta_text = f"{float(eta):.1f}s" if eta is not None else "—"
+        state = str(value.get("state", "UNKNOWN"))
+        error = value.get("error")
+        if error:
+            state = f"{state}: {error}"
+        print(f"{state:<20} {progress:>18} {speed_text:>12} {eta_text:>10}  {value.get('remote_path', '?')}")
+    print("─" * 116)
+    print("说明：rget/rdo 通常会在当前命令中显示进度并等待完成；状态文件位于 ~/.cache/tssh/rdo/*/jobs/。")
+    return 0
+
+
 def _service_path() -> Path:
     return Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "systemd/user"
 
@@ -251,12 +283,43 @@ def _stop_preview_forward(forward: tuple[subprocess.Popen[bytes], int] | None) -
         process.kill()
 
 
-def _preview_shell_command(endpoint_digest: str, session_id: str, nonce: str, remote_port: int) -> str:
+def _preview_shell_command(
+    endpoint_digest: str,
+    session_id: str,
+    nonce: str,
+    remote_port: int,
+    proxy_port: int = 4227,
+) -> str:
     values = {
         "RDO_ENDPOINT": endpoint_digest,
         "RDO_SESSION": session_id,
         "RDO_NONCE": nonce,
         "RDO_PORT": str(remote_port),
+        # The tssh lease already guarantees the remote loopback proxy.  The
+        # marker lets zsh export proxy variables without depending on `ss`,
+        # which is not present on every supported distribution.
+        "REMOTE_DEV_TSSH_PROXY_PORT": str(proxy_port),
+        "http_proxy": f"http://127.0.0.1:{proxy_port}",
+        "https_proxy": f"http://127.0.0.1:{proxy_port}",
+        "HTTP_PROXY": f"http://127.0.0.1:{proxy_port}",
+        "HTTPS_PROXY": f"http://127.0.0.1:{proxy_port}",
+        "no_proxy": "127.0.0.1,localhost",
+        "NO_PROXY": "127.0.0.1,localhost",
+    }
+    exports = "; ".join(f"export {key}={shlex.quote(value)}" for key, value in values.items())
+    return f"{exports}; exec \"${{SHELL:-/bin/sh}}\" -l"
+
+
+def _proxy_shell_command(proxy_port: int = 4227) -> str:
+    """Start a native login shell while carrying the active proxy marker."""
+    values = {
+        "REMOTE_DEV_TSSH_PROXY_PORT": str(proxy_port),
+        "http_proxy": f"http://127.0.0.1:{proxy_port}",
+        "https_proxy": f"http://127.0.0.1:{proxy_port}",
+        "HTTP_PROXY": f"http://127.0.0.1:{proxy_port}",
+        "HTTPS_PROXY": f"http://127.0.0.1:{proxy_port}",
+        "no_proxy": "127.0.0.1,localhost",
+        "NO_PROXY": "127.0.0.1,localhost",
     }
     exports = "; ".join(f"export {key}={shlex.quote(value)}" for key, value in values.items())
     return f"{exports}; exec \"${{SHELL:-/bin/sh}}\" -l"
@@ -289,10 +352,12 @@ def _resolve_identity(destination: str, explicit: str | None) -> str | None:
 def main(argv: list[str] | None = None) -> int:
     raw_argv = list(argv if argv is not None else os.sys.argv[1:])
     if not raw_argv or raw_argv == ["help"] or raw_argv == ["--help"]:
-        print("用法：tssh user@host [SSH 参数]\n\n管理命令：\n  tssh list                         查看代理 endpoint\n  tssh persist user@host [-i KEY]  后台持久保持代理\n  tssh stop user@host              关闭指定持久代理\n  tssh cleanup                     清理全部会话级代理\n  tssh --version                   查看版本")
+        print("用法：tssh user@host [SSH 参数]\n\n管理命令：\n  tssh list                         查看代理 endpoint\n  tssh downloads                    查看 rget/rdo 下载进度\n  tssh persist user@host [-i KEY]  后台持久保持代理\n  tssh stop user@host              关闭指定持久代理\n  tssh cleanup                     清理全部会话级代理\n  tssh --version                   查看版本")
         return 0
     if raw_argv[0] == "list":
         return _status()
+    if raw_argv[0] in {"downloads", "download-status"}:
+        return _downloads_status()
     if raw_argv[0] == "persist":
         return _persist(raw_argv)
     if raw_argv[0] == "stop":
@@ -416,7 +481,11 @@ def main(argv: list[str] | None = None) -> int:
         else:
             preview_bridge.stop()
             preview_bridge = None
-            ssh_args = _ssh_command(args.destination, identity, args.port, args.ssh_args)
+            # Even when the optional preview reverse leg cannot be created,
+            # the normal 4227 lease is still valid.  Carry its marker into a
+            # native login shell so Nvim and Git inherit the HTTP proxy.
+            remote_command = _proxy_shell_command() if not args.ssh_args else None
+            ssh_args = _ssh_command(args.destination, identity, args.port, args.ssh_args, remote_command)
         return subprocess.run(ssh_args, check=False).returncode
     except (OSError, TimeoutError, ValueError, ConnectionError) as exc:
         print(f"tssh: 本地编排器不可用：{exc}", file=os.sys.stderr)

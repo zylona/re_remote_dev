@@ -73,7 +73,7 @@ class ReverseProxyTunnel:
         *,
         settings: ProxySettings,
         destination: str,
-        identity_file: str | Path,
+        identity_file: str | Path | None,
         auth_password: str | None = None,
         ssh_bin: str = "ssh",
         remote_port: int | None = None,
@@ -81,7 +81,7 @@ class ReverseProxyTunnel:
     ) -> None:
         self.settings = settings
         self.destination = destination
-        self.identity_file = str(identity_file)
+        self.identity_file = str(identity_file) if identity_file is not None else None
         self.auth_password = auth_password
         self.ssh_bin = ssh_bin
         self.remote_port = remote_port or choose_remote_port(settings)
@@ -93,14 +93,18 @@ class ReverseProxyTunnel:
         return f"http://127.0.0.1:{self.remote_port}"
 
     def command(self) -> list[str]:
-        command = [self.ssh_bin,
-            "-N",
-            "-T",
-            "-F", "/dev/null",
+        command = [self.ssh_bin, "-N", "-T"]
+        if self.identity_file and self.identity_file != "/dev/null":
+            command.extend(["-F", "/dev/null"])
+        elif self.auth_password is not None:
+            # Password mode is intentionally isolated from key-only global SSH
+            # rules; a key-less key-mode connection keeps the user's config.
+            command.extend(["-F", "/dev/null"])
+        command.extend([
             *self.ssh_extra_args,
             *ssh_reverse_forward_args(self.settings, self.remote_port),
             self.destination,
-        ]
+        ])
         if self.identity_file and self.identity_file != "/dev/null":
             command[1:1] = ["-i", self.identity_file]
         if self.auth_password is not None:

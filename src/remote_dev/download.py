@@ -9,6 +9,7 @@ import shlex
 import subprocess
 import sys
 import threading
+import time
 import uuid
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
@@ -54,6 +55,10 @@ class DownloadJob:
     state: str = "QUEUED"
     error: str | None = None
     future: Future[None] | None = None
+    bytes_total: int = 0
+    bytes_done: int = 0
+    speed_bps: float = 0.0
+    eta_seconds: float | None = None
 
 
 class DownloadManager:
@@ -90,35 +95,89 @@ class DownloadManager:
     def _run(self, key: tuple[str, str], job: DownloadJob) -> None:
         try:
             job.state = "RUNNING"
+            self._write_status(job)
             size, mtime_ns = self._remote_stat(job.remote_path)
+            job.bytes_total = size
+            self._write_status(job)
             sidecar = read_sidecar(sidecar_path(job.local_path))
             if metadata_matches(job.local_path, sidecar, self.endpoint, job.remote_path, size, mtime_ns):
                 job.state = "CACHED"
+                job.bytes_done = size
+                self._write_status(job)
+                self._open_if_requested(job)
+                return
+            self._migrate_legacy_cache(job, size, mtime_ns)
+            sidecar = read_sidecar(sidecar_path(job.local_path))
+            if metadata_matches(job.local_path, sidecar, self.endpoint, job.remote_path, size, mtime_ns):
+                job.state = "CACHED"
+                job.bytes_done = size
+                self._write_status(job)
                 self._open_if_requested(job)
                 return
             job.local_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-            temporary = job.local_path.with_name(f".{job.local_path.name}.{job.request_id}.part")
+            temporary = job.local_path.with_name(f".{job.local_path.name}.part")
+            partial_metadata = temporary.with_name(temporary.name + ".rdo.json")
+            expected_partial = {
+                "endpoint_digest": self.endpoint.digest(),
+                "remote_path": job.remote_path,
+                "remote_size": size,
+                "remote_mtime_ns": mtime_ns,
+            }
+            old_partial = read_sidecar(partial_metadata)
+            if temporary.exists() and (
+                not old_partial
+                or any(old_partial.get(name) != value for name, value in expected_partial.items())
+                or temporary.stat().st_size > size
+            ):
+                temporary.unlink(missing_ok=True)
+                partial_metadata.unlink(missing_ok=True)
+            partial_metadata.write_text(json.dumps(expected_partial, ensure_ascii=False, sort_keys=True), encoding="utf-8")
+            job.bytes_done = temporary.stat().st_size if temporary.exists() else 0
+            self._write_status(job)
             try:
-                self._sftp_get(job.remote_path, temporary)
+                self._sftp_get(job.remote_path, temporary, job)
                 if temporary.stat().st_size != size:
                     raise RuntimeError(f"下载大小不一致：期望 {size}，实际 {temporary.stat().st_size}")
                 local_sha256 = _sha256(temporary)
                 os.replace(temporary, job.local_path)
+                partial_metadata.unlink(missing_ok=True)
                 metadata = sidecar_payload(self.endpoint, job.remote_path, size, mtime_ns, local_sha256)
                 sidecar = sidecar_path(job.local_path)
                 sidecar_tmp = sidecar.with_name(f".{sidecar.name}.{job.request_id}.part")
                 sidecar_tmp.write_text(json.dumps(metadata, ensure_ascii=False, sort_keys=True), encoding="utf-8")
                 os.replace(sidecar_tmp, sidecar)
                 job.state = "READY"
+                job.bytes_done = size
+                self._write_status(job)
                 self._open_if_requested(job)
             finally:
-                temporary.unlink(missing_ok=True)
+                # Keep a valid partial file after a transport failure so the
+                # next request can resume it. Successful transfers already
+                # atomically moved it above.
+                if job.state in {"READY", "CACHED", "READY_WITH_WARNING"}:
+                    temporary.unlink(missing_ok=True)
+                    partial_metadata.unlink(missing_ok=True)
         except Exception as exc:  # worker errors are reported through status, never the SSH PTY
             job.state = "FAILED"
             job.error = str(exc)
+            self._write_status(job)
         finally:
             with self._lock:
                 self._jobs[key] = job
+
+    def _migrate_legacy_cache(self, job: DownloadJob, size: int, mtime_ns: int) -> None:
+        """Move a valid old long-path artifact to the short visible path."""
+        if job.local_path.exists():
+            return
+        legacy = self.layout.legacy_download_path(self.endpoint, job.remote_path)
+        legacy_sidecar = sidecar_path(legacy)
+        legacy_metadata = read_sidecar(legacy_sidecar)
+        if not metadata_matches(legacy, legacy_metadata, self.endpoint, job.remote_path, size, mtime_ns):
+            return
+        job.local_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        os.replace(legacy, job.local_path)
+        if legacy_sidecar.exists():
+            os.replace(legacy_sidecar, sidecar_path(job.local_path))
 
     @staticmethod
     def _open_if_requested(job: DownloadJob) -> None:
@@ -154,18 +213,87 @@ class DownloadManager:
             raise RuntimeError("远程 stat 响应格式无效")
         return int(parts[0]), int(parts[1]) * 1_000_000_000
 
-    def _sftp_get(self, remote_path: str, local_path: Path) -> None:
+    def _sftp_get(self, remote_path: str, local_path: Path, job: DownloadJob) -> None:
         command = self._base_ssh("sftp") + ["-b", "-", self.connection.destination]
-        batch = f"get -p {shlex.quote(remote_path)} {shlex.quote(str(local_path))}\n"
-        result = subprocess.run(command, input=batch, check=False, capture_output=True, text=True, timeout=300)
-        if result.returncode:
-            raise RuntimeError((result.stderr or result.stdout or "SFTP 下载失败").strip())
+        # ``get -a`` resumes an existing local partial file and starts a new
+        # transfer when the file does not exist.
+        batch = f"get -ap {shlex.quote(remote_path)} {shlex.quote(str(local_path))}\n"
+        process = subprocess.Popen(
+            command, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE, text=True,
+        )
+        if process.stdin is None:
+            raise RuntimeError("无法向 SFTP 发送下载请求")
+        process.stdin.write(batch)
+        process.stdin.close()
+        process.stdin = None
+        started = time.monotonic()
+        last_write = started
+        deadline = started + 300
+        while process.poll() is None:
+            now = time.monotonic()
+            if now > deadline:
+                process.terminate()
+                try:
+                    process.wait(timeout=3)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                raise TimeoutError("SFTP 下载超时（超过 300 秒）")
+            try:
+                job.bytes_done = local_path.stat().st_size
+            except FileNotFoundError:
+                job.bytes_done = 0
+            elapsed = max(now - started, 0.001)
+            job.speed_bps = max(0.0, job.bytes_done / elapsed)
+            if job.bytes_total and job.speed_bps > 0:
+                job.eta_seconds = max(0.0, (job.bytes_total - job.bytes_done) / job.speed_bps)
+            if now - last_write >= 0.5:
+                self._write_status(job)
+                last_write = now
+            time.sleep(0.1)
+        stdout, stderr = process.communicate(timeout=3)
+        if process.returncode:
+            raise RuntimeError((stderr or stdout or "SFTP 下载失败").strip())
+        job.bytes_done = local_path.stat().st_size if local_path.exists() else 0
+        self._write_status(job)
+
+    def _write_status(self, job: DownloadJob) -> None:
+        try:
+            status_root = self.layout.cache_root / self.endpoint.digest() / "jobs"
+            status_root.mkdir(parents=True, exist_ok=True, mode=0o700)
+            payload = {
+                "request_id": job.request_id,
+                "endpoint": {"hostname": self.endpoint.hostname, "port": self.endpoint.port, "user": self.endpoint.user},
+                "state": job.state,
+                "remote_path": job.remote_path,
+                "local_path": str(job.local_path),
+                "bytes_done": job.bytes_done,
+                "bytes_total": job.bytes_total,
+                "speed_bps": round(job.speed_bps, 2),
+                "eta_seconds": round(job.eta_seconds, 1) if job.eta_seconds is not None else None,
+                "error": job.error,
+                "updated_at": time.time(),
+            }
+            target = status_root / f"{job.request_id}.json"
+            temporary = target.with_name(f".{target.name}.part")
+            temporary.write_text(json.dumps(payload, ensure_ascii=False, sort_keys=True), encoding="utf-8")
+            os.replace(temporary, target)
+        except OSError:
+            # Progress telemetry is best effort and must never turn a valid
+            # download into a failed request (for example on a read-only home).
+            return
 
     def status(self, request_id: str) -> dict[str, Any] | None:
         with self._lock:
             for job in self._jobs.values():
                 if job.request_id == request_id:
-                    return {"request_id": job.request_id, "state": job.state, "remote_path": job.remote_path, "local_path": str(job.local_path), "error": job.error}
+                    return {
+                        "request_id": job.request_id, "state": job.state,
+                        "remote_path": job.remote_path, "local_path": str(job.local_path),
+                        "bytes_done": job.bytes_done, "bytes_total": job.bytes_total,
+                        "speed_bps": job.speed_bps, "eta_seconds": job.eta_seconds,
+                        "error": job.error,
+                    }
         return None
 
     def shutdown(self) -> None:

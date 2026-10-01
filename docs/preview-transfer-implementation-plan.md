@@ -25,7 +25,8 @@ rdo docs/design.md
 - 相对路径基于远程 `$PWD` 解析为规范化绝对路径。
 - 默认使用本地 SFTP 读取，不要求远端安装 tssh、GUI 或常驻 Agent。
 - 同一 endpoint + 远程绝对路径使用稳定本地目标，未变化时不重复传输。
-- 首次或变化文件后台下载，不阻塞远程 Nvim、SSH 输入和 tssh 会话。
+- 首次或变化文件由本次命令同步等待下载完成，并实时显示进度；不会启动额外的后台命令，
+  也不会阻塞其它 SSH 窗口。
 - PDF 始终以原始 PDF 交给本地查看器，不做单页截图或降级渲染。
 - 普通 `ssh` 和 VS Code Remote-SSH 不注入该能力，也不受其影响。
 
@@ -43,9 +44,9 @@ rdo docs/design.md
 本地 tssh bridge
         ├─ 校验 endpoint、用户、nonce 和路径
         ├─ 复用 ControlMaster / ssh-agent
-        ├─ SFTP stat → 缓存判断 → 后台下载
+        ├─ SFTP stat → 缓存判断 → 流式下载进度
         ├─ `.part` → 校验 → 原子 rename
-        └─ rdo：异步启动 Typora/PDF/图片查看器
+        └─ rdo：下载完成后启动 Typora/PDF/图片查看器
 ```
 
 现有端口职责保持隔离：4227 继续作为 HTTP 代理，4228 继续作为 Codex 事件回调；预览桥使用独立的会话级动态端口，不修改全局 SSH 配置。
@@ -57,7 +58,7 @@ rdo docs/design.md
 | P0 | 契约与状态模型 | 命令、路径、缓存、错误和安全契约 | 已完成：契约模块与单元测试 |
 | P1 | 本地 bridge 与会话通道 | tssh 会话级预览请求通道 | 已完成：loopback bridge、nonce 校验和 lease 生命周期 |
 | P2 | 远端 `rget`/`rdo` helper | 远端短命令和上下文注入 | 已完成：helper、动态 reverse-forward、上下文清理 |
-| P3 | SFTP 下载、去重与异步队列 | 快速、幂等、可取消的下载核心 | 已完成基础版：stat、SFTP、原子替换、并发合并 |
+| P3 | SFTP 下载、去重与异步队列 | 快速、幂等、可取消的下载核心 | 已完成：stat、异步进度、SFTP 断点续传、原子替换、并发合并 |
 | P4 | Nvim `<S-o>` 和本地应用 | 文件树一键预览 | 已完成基础版：查看器选择、回退和 Neo-tree 映射 |
 | P5 | 多设备/多用户/故障回归 | VM 与真实设备验证 | 两台 VM 的真实链路、同设备多窗口、多设备、端口冲突和 VS Code 并行已通过；多用户与深度故障注入待补 |
 | P6 | 制品、文档和发布 | 本地安装包/远端恢复集成 | 可升级、可卸载、可发布 |
@@ -76,7 +77,7 @@ rdo docs/design.md
 
    ```text
    ~/.cache/tssh/rdo/<endpoint-digest>/<path-hash>/<basename>
-   ~/Downloads/remote-dev/<endpoint-digest>/<remote-path>
+   ~/Downloads/remote-dev/<endpoint-digest>/<path-hash>-<basename>
    ```
 
 5. 定义 sidecar 字段：远程端点、绝对路径、size、mtime、远端 SHA256（可选）、本地 SHA256、更新时间和版本。
@@ -145,8 +146,9 @@ reverse-forward 的远端端口发布与远端 helper 放在 P2 一起接入，�
 
 当前实现：`tssh` 为持钥会话建立独立的动态 SSH reverse-forward，并通过远端
 登录 shell 的会话环境注入 `RDO_ENDPOINT`、`RDO_SESSION`、`RDO_NONCE` 和
-`RDO_PORT`。`rget`/`rdo` 只提交请求并立即返回；没有 tssh 上下文、没有密钥或
-reverse-forward 建立失败时，普通 SSH 仍继续使用，不会因此退出。
+`RDO_PORT`。`rget`/`rdo` 会保持当前命令直到缓存命中、下载完成或失败，并在终端显示
+已传输字节、百分比、速度和 ETA；没有 tssh 上下文、没有密钥或 reverse-forward 建立
+失败时，普通 SSH 仍继续使用，不会因此退出。
 
 ## 7. P3：SFTP 下载、去重与异步队列
 
@@ -159,9 +161,12 @@ reverse-forward 建立失败时，普通 SSH 仍继续使用，不会因此退�
 5. `--verify` 才执行远端 SHA256 或 SFTP `check-file` 强校验。
 6. 任务按 endpoint/path 去重；并发请求共享一个下载任务。
 7. 每个 endpoint 限制活动传输数，防止多个大文件拖慢 SSH 输入。
-8. 远端请求入队后立即返回任务 ID；下载和查看器启动在本地后台完成。
-9. 默认不执行昂贵 fsync；`--durable` 才保证持久化语义。
-10. 支持取消、超时、进度、失败重试和 `.part` 清理。
+8. 远端请求保持当前命令连接，bridge 按 200ms 节奏回传进度；完成后发送最终状态，
+   `rdo` 再启动本地查看器。
+9. 状态写入 `~/.cache/tssh/rdo/*/jobs/`，可用 `tssh downloads` 查看仍在运行或最近完成的任务。
+10. 默认不执行昂贵 fsync；`--durable` 才保证持久化语义。
+11. 使用稳定 `.part` 文件和 SFTP `get -a` 断点续传；远程大小或 mtime 变化时丢弃旧分片。
+12. 支持超时、进度、失败重试和 `.part` 保留；Ctrl-C 不会损坏已完成的旧文件。
 
 ### 验收
 
@@ -169,24 +174,25 @@ reverse-forward 建立失败时，普通 SSH 仍继续使用，不会因此退�
 - 远程文件变化后本地只保留最新稳定版本。
 - 同一文件两个窗口同时请求只下载一次。
 - 断网、取消、磁盘不足不会损坏旧文件。
-- 首次请求不阻塞远程 Nvim 或交互式 shell。
+- 首次请求只阻塞当前 `rget`/`rdo` 命令，并显示可读进度；远程 Nvim、其它 SSH 窗口不受影响。
 
 当前实现：本地 `DownloadManager` 使用系统 OpenSSH 的 `ssh`/`sftp` 客户端，默认
-最多两个后台 worker；同一 endpoint+路径的活动任务合并，完成后写入 SHA256
-sidecar。当前版本已实现 stat 快速命中、`.part` 临时文件和原子替换；取消、
-进度展示和远端强校验留待后续增强。
+最多两个 worker；同一 endpoint+路径的活动任务合并，完成后写入 SHA256 sidecar。
+bridge 在当前命令连接上流式回传进度，SFTP 使用 `get -a` 复用 `.part` 断点，完成后
+原子替换；`tssh downloads` 提供脱离当前终端的状态查看。
 
 ## 8. P4：Nvim `<S-o>` 和本地应用
 
 ### 实施内容
 
-1. 在恢复的 Nvim 文件树中加入 `<S-o>` 映射。
+1. 在恢复的 Nvim 文件树中加入 `O`（终端中的 Shift+O）映射，并保留 `<S-o>` GUI 别名。
 2. 普通文件调用 `rdo`；目录不自动递归下载，提示使用显式归档命令。
 3. 应用选择顺序可配置：
    - Markdown：Typora，其次 `xdg-open`；
    - PDF：用户配置的 PDF 阅读器，其次 `xdg-open`；
    - 图片：用户配置的图片查看器，其次 `xdg-open`。
-4. `rdo` 等待下载成功后异步启动本地应用，不等待应用退出。
+4. `rdo` 等待下载成功后异步启动本地应用，不等待应用退出；从 Nvim 文件树调用时，使用
+   `on_stdout`/`on_exit` 通知显示大文件下载进度和完成状态。
 5. 应用不存在时打印本地文件路径，不能让 Nvim 报错退出。
 6. `rdo --fast` 明确显示可能打开旧缓存，不作为最终审查默认模式。
 

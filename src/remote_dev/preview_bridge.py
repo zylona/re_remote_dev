@@ -12,6 +12,7 @@ import json
 import secrets
 import socket
 import threading
+import time
 import uuid
 from dataclasses import dataclass
 from typing import Any, Callable
@@ -82,7 +83,7 @@ class PreviewBridge:
     hold open the interactive SSH session.
     """
 
-    def __init__(self, context: PreviewContext, on_request: Callable[[PreviewRequest], None] | None = None) -> None:
+    def __init__(self, context: PreviewContext, on_request: Callable[[PreviewRequest], Any] | None = None) -> None:
         self.context = context
         self.on_request = on_request
         self._listener: socket.socket | None = None
@@ -136,7 +137,7 @@ class PreviewBridge:
 
     def _handle(self, conn: socket.socket) -> None:
         with conn:
-            conn.settimeout(2.0)
+            conn.settimeout(5.0)
             data = bytearray()
             try:
                 while len(data) <= MAX_REQUEST_BYTES:
@@ -153,15 +154,53 @@ class PreviewBridge:
                     or not secrets.compare_digest(request.nonce, self.context.nonce)
                 ):
                     raise PreviewBridgeError("preview request context mismatch")
-                if self.on_request is not None:
-                    self.on_request(request)
+                result = self.on_request(request) if self.on_request is not None else None
                 response: dict[str, Any] = {"ok": True, "request_id": request.request_id, "queued": True}
+                # DownloadManager returns a DownloadJob.  Keep this bridge
+                # decoupled from that class while exposing the deterministic
+                # local destination to the remote helper immediately.
+                if result is not None:
+                    local_path = getattr(result, "local_path", None)
+                    state = getattr(result, "state", None)
+                    if local_path is not None:
+                        response["local_path"] = str(local_path)
+                    if state is not None:
+                        response["state"] = str(state)
+                    for name in ("bytes_done", "bytes_total", "speed_bps", "eta_seconds", "error"):
+                        value = getattr(result, name, None)
+                        if value is not None:
+                            response[name] = value
+                    future = getattr(result, "future", None)
+                else:
+                    future = None
+                conn.sendall((json.dumps(response, separators=(",", ":")) + "\n").encode("utf-8"))
+                if future is not None:
+                    # Keep the remote command alive and stream authoritative
+                    # progress until the local worker reaches a terminal state.
+                    while not future.done():
+                        time.sleep(0.2)
+                        progress = self._job_response(request, result)
+                        progress["event"] = "progress"
+                        conn.sendall((json.dumps(progress, separators=(",", ":")) + "\n").encode("utf-8"))
+                    final = self._job_response(request, result)
+                    final["event"] = "complete"
+                    conn.sendall((json.dumps(final, separators=(",", ":")) + "\n").encode("utf-8"))
+                return
             except (PreviewBridgeError, ValueError, OSError, socket.timeout) as exc:
                 response = {"ok": False, "error": str(exc)}
             try:
                 conn.sendall((json.dumps(response, separators=(",", ":")) + "\n").encode("utf-8"))
             except OSError:
                 pass
+
+    @staticmethod
+    def _job_response(request: PreviewRequest, job: Any) -> dict[str, Any]:
+        response: dict[str, Any] = {"ok": True, "request_id": request.request_id}
+        for name in ("local_path", "state", "bytes_done", "bytes_total", "speed_bps", "eta_seconds", "error"):
+            value = getattr(job, name, None)
+            if value is not None:
+                response[name] = str(value) if name in {"local_path", "state", "error"} else value
+        return response
 
 
 def new_context(endpoint_digest: str, session_id: str, *, local_port: int = 0, remote_port: int = 0) -> PreviewContext:

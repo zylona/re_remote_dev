@@ -333,7 +333,7 @@ PDF 和图片默认只读预览。Markdown 默认也采用“只读暂存预览�
 本地 bridge 通过 SFTP 读取远程文件
         │ .part 临时文件 →（持久下载时 fsync）→ 原子 rename
         ▼
-~/Downloads/remote-dev/<endpoint-digest>/<timestamp>-<basename>
+~/Downloads/remote-dev/<endpoint-digest>/<path-hash>-<basename>
         │
         └─ 可选：自动调用 Typora/PDF 阅读器/图片查看器
 ```
@@ -464,7 +464,7 @@ Typora / PDF 阅读器 / 图片查看器
 
 ~/Downloads/remote-dev/
 └── <endpoint-digest>/
-    └── YYYY/MM/DD/<timestamp>-<safe-basename>
+    └── <path-hash>-<safe-basename>
 ```
 
 - 缓存目录 `0700`，默认 TTL 24 小时；`rdo --clean` 清理缓存；
@@ -495,7 +495,7 @@ endpoint-digest + canonical-remote-absolute-path
 默认下载路径不使用时间戳作为唯一目录，而是保持稳定：
 
 ```text
-~/Downloads/remote-dev/<endpoint-digest>/workspace/report.pdf
+~/Downloads/remote-dev/<endpoint-digest>/<path-hash>-report.pdf
 ```
 
 路径中的 `..`、控制字符和不可安全显示的字符必须编码；远程根目录、用户和原始绝对路径写入 sidecar，而不是依赖文件名推断来源。预览缓存仍使用：

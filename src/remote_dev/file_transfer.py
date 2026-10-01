@@ -93,7 +93,17 @@ class CacheLayout:
         return self.cache_root / endpoint.digest() / path_digest(remote_path) / safe_basename(remote_path)
 
     def download_path(self, endpoint: EndpointIdentity, remote_path: str) -> Path:
-        """Map an absolute remote path below an endpoint-isolated directory."""
+        """Map a remote file to a short, stable, endpoint-isolated path.
+
+        The full remote path remains in the sidecar metadata.  Keeping only a
+        path digest and the safe basename in the visible filename avoids
+        unwieldy nested paths while retaining deterministic cache identity.
+        """
+        filename = f"{path_digest(remote_path)[:16]}-{safe_basename(remote_path)}"
+        return self.download_root / endpoint.digest() / filename
+
+    def legacy_download_path(self, endpoint: EndpointIdentity, remote_path: str) -> Path:
+        """Return the pre-short-path location for one-time cache migration."""
         relative = remote_path.lstrip("/") or "root"
         parts = [_safe_component(part) for part in relative.split("/")]
         return self.download_root / endpoint.digest() / Path(*parts)
