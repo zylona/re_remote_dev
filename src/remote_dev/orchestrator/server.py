@@ -552,7 +552,12 @@ class OrchestratorServer:
             )
         elif event.event == "CODEX_EXIT":
             self._oauth_browser_opened.discard(event.target)
-            if status.session_count <= 1:
+            # ``session_count`` includes the owning SSH lease.  A single
+            # Codex process therefore observes count=2 (SSH + Codex), and
+            # should release its temporary OAuth forward immediately when it
+            # exits; only counts greater than two indicate another active
+            # SSH/Codex participant may still need the callback channel.
+            if status.session_count <= 2:
                 try:
                     self.oauth.finish(status.target)
                 except OAuthError:

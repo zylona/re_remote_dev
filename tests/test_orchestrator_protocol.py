@@ -333,6 +333,24 @@ def test_server_accepts_codex_lifecycle_events():
             pass
 
 
+def test_codex_exit_releases_callback_with_one_ssh_lease(monkeypatch, tmp_path):
+    listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    server = OrchestratorServer(listener, None)
+    target = TargetKey("host", 22, "u")
+    finished = []
+    monkeypatch.setattr(server.oauth, "start", lambda target, **kwargs: None)
+    monkeypatch.setattr(server.oauth, "finish", lambda target=None: finished.append(target) or True)
+    assert server.handle({
+        "op": "register",
+        "target": {"hostname": "host", "port": 22, "user": "u"},
+        "identity_file": str(tmp_path / "id"),
+    })["ok"]
+    assert server.handle({"v": 1, "event": "CODEX_START", "target": target.digest, "nonce": "n"})["ok"]
+    assert server.handle({"v": 1, "event": "CODEX_EXIT", "target": target.digest, "nonce": "n"})["ok"]
+    assert finished and finished[-1] == target
+    listener.close()
+
+
 def test_codex_start_automatically_requests_callback_forward(monkeypatch):
     listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     server = OrchestratorServer(listener, None)
