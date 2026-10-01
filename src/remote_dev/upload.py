@@ -81,9 +81,11 @@ def put_file(connection: UploadConnection, local_path: Path, *, progress: bool =
     remote_partial = f"{root}/.{local_path.name}.tssh-part"
     total = local_path.stat().st_size
     started = time.monotonic()
+    resume_from = _remote_size(connection, remote_partial)
+    put_flags = "-ap" if resume_from > 0 else "-p"
     command = _ssh_base(connection, "sftp") + ["-b", "-", connection.destination]
     batch = (
-        f"put -ap {_sftp_quote(str(local_path))} {_sftp_quote(f'{UPLOAD_ROOT}/.{local_path.name}.tssh-part')}\n"
+        f"put {put_flags} {_sftp_quote(str(local_path))} {_sftp_quote(f'{UPLOAD_ROOT}/.{local_path.name}.tssh-part')}\n"
         f"rename {_sftp_quote(f'{UPLOAD_ROOT}/.{local_path.name}.tssh-part')} {_sftp_quote(f'{UPLOAD_ROOT}/{local_path.name}')}\n"
     )
     process = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
