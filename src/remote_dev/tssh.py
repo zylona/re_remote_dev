@@ -7,19 +7,28 @@ import hashlib
 import json
 import os
 import shlex
+import secrets
 import signal
+import shutil
 import socket
 import subprocess
 import sys
 import threading
+import time
 import uuid
 from pathlib import Path
 from typing import Any
 
 try:
     from .lease_config import load as load_lease_settings
+    from .file_transfer import EndpointIdentity
+    from .download import DownloadManager, EndpointConnection
+    from .preview_bridge import PreviewBridge, new_context
 except ImportError:  # Direct ``python src/remote_dev/tssh.py`` development entrypoint.
     from remote_dev.lease_config import load as load_lease_settings
+    from remote_dev.file_transfer import EndpointIdentity
+    from remote_dev.download import DownloadManager, EndpointConnection
+    from remote_dev.preview_bridge import PreviewBridge, new_context
 
 
 def _version() -> str:
@@ -119,8 +128,20 @@ def _service_path() -> Path:
 
 
 def _persistent_command(destination: str, identity: str | None, port: int) -> list[str]:
-    launcher = Path(sys.argv[0]).resolve()
-    command = [str(launcher)] if launcher.suffix != ".py" and os.access(launcher, os.X_OK) else [sys.executable, str(launcher)]
+    # ``python -m remote_dev.tssh`` sets ``sys.argv[0]`` to the module file.
+    # Persisting that path directly breaks relative imports in a systemd unit.
+    # Prefer the release wrapper, which exports the package PYTHONPATH, and
+    # keep an explicit module fallback for source/dev installs.
+    package_root = Path(__file__).resolve().parents[1]
+    candidates = [Path(__file__).resolve().parents[2] / "bin/tssh"]
+    installed = shutil.which("tssh")
+    if installed:
+        candidates.append(Path(installed).resolve())
+    launcher = next((candidate for candidate in candidates if candidate.is_file() and os.access(candidate, os.X_OK)), None)
+    if launcher is not None:
+        command = [str(launcher)]
+    else:
+        command = ["/usr/bin/env", f"PYTHONPATH={package_root}", sys.executable, "-m", "remote_dev.tssh"]
     args = command + ["--persistent-run", destination]
     if identity:
         args.extend(["--identity", identity])
@@ -171,16 +192,74 @@ def _parse_destination(value: str) -> tuple[str, str]:
     return user, host
 
 
-def _ssh_command(destination: str, identity: str | None, port: int, passthrough: list[str]) -> list[str]:
+def _ssh_command(destination: str, identity: str | None, port: int, passthrough: list[str], remote_command: str | None = None) -> list[str]:
     """Build native ssh argv with the destination before an optional command."""
     command = ["ssh"]
     if identity:
         command.extend(["-i", identity])
     if port != 22:
         command.extend(["-p", str(port)])
+    if remote_command is not None:
+        command.append("-t")
     command.append(destination)
+    if remote_command is not None:
+        command.append(remote_command)
     command.extend(passthrough)
     return command
+
+
+def _preview_forward(destination: str, identity: str | None, port: int, local_port: int) -> tuple[subprocess.Popen[bytes], int] | None:
+    """Start a best-effort per-session reverse leg for rget/rdo."""
+    if not identity and not os.environ.get("SSH_AUTH_SOCK"):
+        return None
+    for _ in range(8):
+        remote_port = secrets.randbelow(20_000) + 40_000
+        command = [
+            "ssh", "-F", "/dev/null", "-N", "-T",
+            "-o", "BatchMode=yes", "-o", "ExitOnForwardFailure=yes",
+            "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=3",
+        ]
+        if identity:
+            command.extend(["-i", identity])
+        if port != 22:
+            command.extend(["-p", str(port)])
+        command.extend(["-R", f"127.0.0.1:{remote_port}:127.0.0.1:{local_port}", destination])
+        try:
+            process = subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except OSError:
+            return None
+        time.sleep(0.15)
+        if process.poll() is None:
+            return process, remote_port
+        try:
+            process.wait(timeout=1)
+        except subprocess.TimeoutExpired:
+            process.kill()
+    return None
+
+
+def _stop_preview_forward(forward: tuple[subprocess.Popen[bytes], int] | None) -> None:
+    if forward is None:
+        return
+    process, _ = forward
+    if process.poll() is not None:
+        return
+    process.terminate()
+    try:
+        process.wait(timeout=2)
+    except subprocess.TimeoutExpired:
+        process.kill()
+
+
+def _preview_shell_command(endpoint_digest: str, session_id: str, nonce: str, remote_port: int) -> str:
+    values = {
+        "RDO_ENDPOINT": endpoint_digest,
+        "RDO_SESSION": session_id,
+        "RDO_NONCE": nonce,
+        "RDO_PORT": str(remote_port),
+    }
+    exports = "; ".join(f"export {key}={shlex.quote(value)}" for key, value in values.items())
+    return f"{exports}; exec \"${{SHELL:-/bin/sh}}\" -l"
 
 
 def _resolve_identity(destination: str, explicit: str | None) -> str | None:
@@ -240,9 +319,11 @@ def main(argv: list[str] | None = None) -> int:
     identity = _resolve_identity(args.destination, args.identity)
     if identity:
         candidate["identity_file"] = identity
-    ssh_args = _ssh_command(args.destination, identity, args.port, args.ssh_args)
     stop = threading.Event()
     heartbeat_thread: threading.Thread | None = None
+    preview_bridge: PreviewBridge | None = None
+    preview_forward: tuple[subprocess.Popen[bytes], int] | None = None
+    download_manager: DownloadManager | None = None
     lease_settings = load_lease_settings()
 
     def heartbeat() -> None:
@@ -295,6 +376,47 @@ def main(argv: list[str] | None = None) -> int:
             while not stop.wait(3600):
                 pass
             return 0
+        # P2 adds a separate reverse leg.  Failure is intentionally soft: the
+        # SSH session remains a native interactive session without preview.
+        preview_context = new_context(EndpointIdentity(host, args.port, user).digest(), session_id)
+        control_dir = Path(os.environ.get("XDG_RUNTIME_DIR", f"/tmp/tssh-{os.getuid()}")) / "tssh" / "preview-cm"
+        control_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+        control_path = control_dir / hashlib.sha256(f"{host}:{args.port}|{user}".encode()).hexdigest()[:32]
+        download_manager = DownloadManager(EndpointConnection(host, args.port, user, identity, str(control_path)))
+        preview_bridge = PreviewBridge(preview_context, download_manager.submit)
+        preview_context = preview_bridge.start()
+        preview_forward = None if args.ssh_args else _preview_forward(args.destination, identity, args.port, preview_context.local_port)
+        if preview_forward is not None:
+            preview_context = type(preview_context)(
+                preview_context.endpoint_digest,
+                preview_context.session_id,
+                preview_context.nonce,
+                preview_context.local_port,
+                preview_forward[1],
+            )
+            preview_bridge.context = preview_context
+            acquire_preview = {
+                "endpoint_digest": preview_context.endpoint_digest,
+                "session_id": preview_context.session_id,
+                "nonce": preview_context.nonce,
+                "local_port": preview_context.local_port,
+                "remote_port": preview_context.remote_port,
+            }
+            try:
+                _request({"op": "preview_register", "session_id": session_id, "endpoint": endpoint, "preview": acquire_preview}, 2)
+            except (OSError, TimeoutError, ValueError, ConnectionError):
+                pass
+            remote_command = _preview_shell_command(
+                preview_context.endpoint_digest,
+                preview_context.session_id,
+                preview_context.nonce,
+                preview_context.remote_port,
+            )
+            ssh_args = _ssh_command(args.destination, identity, args.port, args.ssh_args, remote_command)
+        else:
+            preview_bridge.stop()
+            preview_bridge = None
+            ssh_args = _ssh_command(args.destination, identity, args.port, args.ssh_args)
         return subprocess.run(ssh_args, check=False).returncode
     except (OSError, TimeoutError, ValueError, ConnectionError) as exc:
         print(f"tssh: 本地编排器不可用：{exc}", file=os.sys.stderr)
@@ -303,6 +425,11 @@ def main(argv: list[str] | None = None) -> int:
         stop.set()
         if heartbeat_thread is not None:
             heartbeat_thread.join(timeout=1)
+        if preview_bridge is not None:
+            preview_bridge.stop()
+        _stop_preview_forward(preview_forward)
+        if download_manager is not None:
+            download_manager.shutdown()
         try:
             _request({"op": "release", "endpoint": endpoint, "session_id": session_id}, 2)
         except (OSError, TimeoutError, ValueError, ConnectionError):

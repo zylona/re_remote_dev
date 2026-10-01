@@ -29,6 +29,7 @@
     mode: '0755'
   loop:
     - "{{ user_shell_home }}/.local/bin"
+    - "{{ user_shell_home }}/.local/libexec"
     - "{{ user_shell_home }}/.config"
     - "{{ user_shell_home }}/.config/antidote"
     - "{{ user_shell_home }}/.cache/antidote"
@@ -92,6 +93,24 @@
     dest: "{{ user_shell_home }}/.local/bin/rd-help"
     owner: "{{ remote_dev.target_user }}"
     mode: '0755'
+- name: 部署远程文件下载与预览 helper
+  ansible.builtin.copy:
+    src: "{{ role_path }}/../../scripts/remote_preview_helper.py"
+    dest: "{{ user_shell_home }}/.local/libexec/remote_preview_helper.py"
+    owner: "{{ remote_dev.target_user }}"
+    mode: '0755'
+- name: 创建 rget 入口
+  ansible.builtin.file:
+    src: "{{ user_shell_home }}/.local/libexec/remote_preview_helper.py"
+    dest: "{{ user_shell_home }}/.local/bin/rget"
+    state: link
+    owner: "{{ remote_dev.target_user }}"
+- name: 创建 rdo 入口
+  ansible.builtin.file:
+    src: "{{ user_shell_home }}/.local/libexec/remote_preview_helper.py"
+    dest: "{{ user_shell_home }}/.local/bin/rdo"
+    state: link
+    owner: "{{ remote_dev.target_user }}"
 - name: 写入 zsh 受管配置区块
   ansible.builtin.blockinfile:
     path: "{{ user_shell_home }}/.zshrc"
@@ -102,6 +121,15 @@
     block: |
       export ZDOTDIR="${ZDOTDIR:-$HOME}"
       export PATH="$HOME/.local/bin:$PATH"
+      # Omarchy-compatible quick Neovim entrypoint: `n` opens the current
+      # directory, while arguments are passed through to nvim unchanged.
+      n() {
+        if (( $# == 0 )); then
+          command nvim .
+        else
+          command nvim "$@"
+        fi
+      }
       if [[ -o interactive ]]; then
         autoload -Uz compinit && compinit -C -d "$HOME/.cache/zsh/zcompdump"
       fi

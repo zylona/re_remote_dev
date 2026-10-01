@@ -7,13 +7,14 @@
 
 用一次受控运行，把一台可 SSH 登录的 Linux 主机恢复成现代远程开发环境：zsh、Antidote、Powerlevel10k、mise、fzf、zoxide、Zellij、Neovim 和 Codex CLI。项目采用 Ansible-first 设计，支持无外网目标机的临时 HTTP 代理，并保持普通 `ssh user@host` 的原生连接体验。
 
-> 当前发布版本：`v0.1.17`。已在 Debian 13、Arch/Omarchy 和 openEuler 24.03 上完成真实回归，包含多窗口、多用户共享隧道、断线恢复和 30 分钟连续观察。默认不安装远端常驻 Agent、不开放公网端口、不保存密码或 API Token。
+> 当前发布版本：`v0.1.18`。已在 Debian 13、Arch/Omarchy 和 openEuler 24.03 上完成真实回归，包含多窗口、多用户共享隧道、断线恢复和 30 分钟连续观察。默认不安装远端常驻 Agent、不开放公网端口、不保存密码或 API Token。
 
 ## 特性
 
 - **单台设备向导**：交互输入地址、用户、密钥或 SSH 密码，自动探测发行版和提权方式。
 - **跨发行版基础恢复**：识别 apt、dnf/yum、apk、pacman、zypper；目标机无需预装 Python。
 - **本机习惯**：静态 Antidote bundle、Lean 风格 p10k、mise、fzf/zoxide、LazyVim + Omarchy 风格配置。
+- **Omarchy 快捷入口**：远端交互式 zsh 提供 `n` 函数；无参数执行 `nvim .`，带参数时原样传给 Neovim。
 - **多窗口稳定性**：Zellij 默认，tmux fallback；持久 ControlMaster 专用于代理/事件转发，普通 SSH 窗口使用独立连接，避免 Codex 流量拖慢终端输入。
 - **受控代理**：把控制端 `127.0.0.1:4227` 临时转发到目标机 loopback，失败和退出自动清理。
 - **可验证、可重跑**：固定 Play 顺序、独立只读 verify、第二次 apply 幂等检查。
@@ -64,6 +65,7 @@ uv sync --locked
 ```bash
 ssh developer@203.0.113.10
 zellij --layout dev
+n
 nvim
 codex
 ```
@@ -177,14 +179,14 @@ lease_ttl = 3
 `lease_ttl` 必须大于两个 heartbeat 间隔；无效值会回退到默认值。该配置只包含时序参数，
 不保存密码、私钥或代理凭据。
 
-也可以从 [v0.1.17 Release](https://github.com/zylona/re_remote_dev/releases/tag/v0.1.17) 下载完整本地集成制品。生产环境建议固定版本并校验 SHA256：
+也可以从 [v0.1.18 Release](https://github.com/zylona/re_remote_dev/releases/tag/v0.1.18) 下载完整本地集成制品。生产环境建议固定版本并校验 SHA256：
 
 ```bash
-curl -fLO https://github.com/zylona/re_remote_dev/releases/download/v0.1.17/remote-dev-orchestrator-v0.1.17-linux.tar.gz
-curl -fLO https://github.com/zylona/re_remote_dev/releases/download/v0.1.17/remote-dev-orchestrator-v0.1.17-linux.tar.gz.sha256
-sha256sum -c remote-dev-orchestrator-v0.1.17-linux.tar.gz.sha256
-tar -xzf remote-dev-orchestrator-v0.1.17-linux.tar.gz
-./remote-dev-orchestrator-v0.1.17-linux/install
+curl -fLO https://github.com/zylona/re_remote_dev/releases/download/v0.1.18/remote-dev-orchestrator-v0.1.18-linux.tar.gz
+curl -fLO https://github.com/zylona/re_remote_dev/releases/download/v0.1.18/remote-dev-orchestrator-v0.1.18-linux.tar.gz.sha256
+sha256sum -c remote-dev-orchestrator-v0.1.18-linux.tar.gz.sha256
+tar -xzf remote-dev-orchestrator-v0.1.18-linux.tar.gz
+./remote-dev-orchestrator-v0.1.18-linux/install
 ```
 
 安装器会迁移并备份旧版 `# >>> remote-dev ssh integration >>>` 标记区块，但默认不再写入全局
@@ -194,7 +196,7 @@ tar -xzf remote-dev-orchestrator-v0.1.17-linux.tar.gz
 已安装版本可以使用制品内的 `rollback VERSION` 回滚：
 
 ```bash
-./remote-dev-orchestrator-v0.1.17-linux/rollback 0.1.10
+./remote-dev-orchestrator-v0.1.18-linux/rollback 0.1.10
 ```
 
 VS Code Remote‑SSH 默认直接使用普通的 `~/.ssh/config`。安装器不会生成或维护
@@ -202,6 +204,30 @@ VS Code Remote‑SSH 默认直接使用普通的 `~/.ssh/config`。安装器不�
 都可以共享同一份配置。
 
 ## 代理与 Codex
+
+### Clash/Mihomo TUN 注意事项
+
+如果控制端启用了 Clash/Mihomo TUN，目标设备的 SSH 地址必须从 TUN 路由中排除；仅添加
+`DIRECT` 规则并不等于绕过 TUN。建议在 Clash 的 TUN 覆盖配置中加入目标网段或单个地址，例如：
+
+```yaml
+tun:
+  route-exclude-address:
+    - 10.40.0.0/18
+    # 或仅填写某个目标的实际地址，例如 203.0.113.10/32
+```
+
+修改路由后请关闭并重新建立已有的 `tssh`、普通 SSH 和 VS Code Remote-SSH 会话；已经建立的
+TCP 连接不会自动迁移到新路由。验证方式：
+
+```bash
+ip route get <目标地址>
+# 应显示真实网卡（例如 enp...），而不是 dev Mihomo
+```
+
+如果 Codex/VS Code 扩展下载触发 TLS 错误、SSH 超时或终端输入变卡，先执行 `tssh cleanup`，
+关闭 VS Code 远程窗口后重新连接，再分别测试 `curl -x http://127.0.0.1:4227` 和 Remote-SSH。
+这通常是 4227 代理数据通道或 Clash 出口拥塞，不是 SSH 认证失败。
 
 查看当前目标专用的操作提示：
 

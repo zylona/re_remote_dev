@@ -151,7 +151,15 @@ def _install_local_orchestrator(*, confirm: bool = True, restore_flow: bool = Tr
     socket_unit.write_text(socket_content, encoding="utf-8")
     socket_unit.chmod(0o600)
     subprocess.run(["systemctl", "--user", "daemon-reload"], check=True)
-    subprocess.run(["systemctl", "--user", "disable", "--now", "remote-dev-orchestrator.socket", "remote-dev-orchestrator.service"], check=False)
+    # The legacy units are optional.  Suppress the expected "unit does not
+    # exist" diagnostic so a normal upgrade is not presented as an error;
+    # failures from the new tssh units below remain visible via check=True.
+    subprocess.run(
+        ["systemctl", "--user", "disable", "--now", "remote-dev-orchestrator.socket", "remote-dev-orchestrator.service"],
+        check=False,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
     subprocess.run(["systemctl", "--user", "enable", "--now", "tssh.socket"], check=True)
     service_active = subprocess.run(["systemctl", "--user", "is-active", "--quiet", "tssh.service"], check=False).returncode == 0
     if service_changed or socket_changed or service_active:

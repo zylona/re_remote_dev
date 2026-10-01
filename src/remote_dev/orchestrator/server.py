@@ -115,6 +115,8 @@ class OrchestratorServer:
             return self._force_cleanup()
         if op in {"acquire", "release", "heartbeat"}:
             return self._handle_lease(op, payload)
+        if op == "preview_register":
+            return self._register_preview(payload)
         if op in {"register", "unregister"}:
             target_data = payload.get("target")
             if not isinstance(target_data, dict):
@@ -149,6 +151,40 @@ class OrchestratorServer:
                 self._identity_files.pop(target.digest, None)
             return {"ok": True, "digest": target.digest}
         return {"ok": False, "error": f"不支持的操作：{op}"}
+
+    def _register_preview(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Attach a P1 loopback preview context to an existing lease."""
+        session_id = payload.get("session_id")
+        preview = payload.get("preview")
+        if not isinstance(session_id, str) or not session_id or len(session_id) > 128:
+            return {"ok": False, "error": "session_id 无效"}
+        if not isinstance(preview, dict):
+            return {"ok": False, "error": "preview 必须是 object"}
+        session = self.sessions.get(session_id)
+        if session is None:
+            return {"ok": False, "error": "LEASE_CLEARED"}
+        required = ("endpoint_digest", "session_id", "nonce", "local_port")
+        if any(key not in preview for key in required) or preview.get("session_id") != session_id:
+            return {"ok": False, "error": "preview context 无效"}
+        try:
+            local_port = int(preview["local_port"])
+            remote_port = int(preview.get("remote_port", local_port))
+        except (TypeError, ValueError):
+            return {"ok": False, "error": "preview.local_port 无效"}
+        if not 1 <= local_port <= 65535 or not 1 <= remote_port <= 65535:
+            return {"ok": False, "error": "preview.local_port 无效"}
+        for key, limit in (("endpoint_digest", 128), ("nonce", 256)):
+            value = preview.get(key)
+            if not isinstance(value, str) or not value or len(value) > limit:
+                return {"ok": False, "error": f"preview.{key} 无效"}
+        session["preview"] = {
+            "endpoint_digest": preview["endpoint_digest"],
+            "session_id": session_id,
+            "nonce": preview["nonce"],
+            "local_port": local_port,
+            "remote_port": remote_port,
+        }
+        return {"ok": True, "session_id": session_id, "preview": session["preview"]}
 
     @staticmethod
     def _parse_endpoint(payload: dict[str, Any]) -> EndpointKey:

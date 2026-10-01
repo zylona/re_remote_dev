@@ -88,6 +88,36 @@ def test_endpoint_acquire_is_idempotent_and_release_keeps_other_session():
     listener.close()
 
 
+def test_preview_context_is_attached_to_live_lease_and_cleared_on_release():
+    listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    server = OrchestratorServer(listener, None)
+    endpoint = {"hostname": "host", "port": 22}
+    acquired = server.handle({
+        "op": "acquire",
+        "endpoint": endpoint,
+        "candidate": {"user": "u"},
+        "session_id": "preview-session",
+    })
+    context = {
+        "endpoint_digest": "user-endpoint-digest",
+        "session_id": "preview-session",
+        "nonce": "one-time-nonce",
+        "local_port": 43123,
+    }
+    registered = server.handle({
+        "op": "preview_register",
+        "endpoint": endpoint,
+        "session_id": "preview-session",
+        "preview": context,
+    })
+    expected_context = {**context, "remote_port": 43123}
+    assert acquired["ok"] and registered["preview"] == expected_context
+    assert server.sessions["preview-session"]["preview"] == expected_context
+    server.handle({"op": "release", "endpoint": endpoint, "session_id": "preview-session"})
+    assert "preview-session" not in server.sessions
+    listener.close()
+
+
 def test_force_cleanup_stops_all_endpoint_forwarders(tmp_path):
     class FakeForwarder:
         def __init__(self):

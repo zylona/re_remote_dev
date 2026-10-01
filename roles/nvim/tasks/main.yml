@@ -184,6 +184,16 @@
     - "{{ ansible_facts.user_dir }}/.local/state/nvim"
     - "{{ ansible_facts.user_dir }}/.cache/nvim"
 
+- name: 创建 Neovim 配置子目录
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    mode: '0755'
+  loop:
+    - "{{ nvim_config_dir }}/lua/config"
+    - "{{ nvim_config_dir }}/lua/plugins"
+    - "{{ nvim_config_dir }}/plugin/after"
+
 - name: 备份现有 Neovim 配置
   ansible.builtin.command:
     argv:
@@ -211,6 +221,7 @@
     - lua/plugins/all-themes.lua
     - lua/plugins/disable-news-alert.lua
     - lua/plugins/omarchy-theme-hotreload.lua
+    - lua/plugins/remote-preview.lua
     - lua/plugins/snacks-animated-scrolling-off.lua
     - lua/plugins/theme.lua
     - plugin/after/transparency.lua
