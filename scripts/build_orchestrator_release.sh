@@ -14,6 +14,7 @@ cp "$root_dir/src/remote_dev/ssh_integration.py" \
   "$root_dir/src/remote_dev/tssh.py" \
   "$root_dir/src/remote_dev/lease_config.py" \
   "$root_dir/src/remote_dev/file_transfer.py" \
+  "$root_dir/src/remote_dev/upload.py" \
   "$root_dir/src/remote_dev/preview_bridge.py" \
   "$root_dir/src/remote_dev/preview_open.py" \
   "$root_dir/src/remote_dev/download.py" \

@@ -50,6 +50,7 @@ tssh --help # 带 4227 转发的 SSH 入口
 tssh user@host # 自动使用 ~/.ssh/config 中解析出的 IdentityFile
 tssh -i ~/.ssh/id_ed25519 user@host # 显式指定密钥
 tssh list # 查看所有活动 endpoint
+tssh put ./report.pdf user@host # 上传到目标 ~/Uploads/remote-dev/
 tssh persist user@host # 后台持久保持代理，不占用终端
 tssh stop user@host # 关闭指定持久代理
 tssh cleanup # 清理全部会话级代理

@@ -30,7 +30,9 @@ def test_tssh_cleanup_command(monkeypatch, capsys):
 
 def test_tssh_help_and_list_commands(monkeypatch, capsys):
     assert tssh.main(["help"]) == 0
-    assert "persist" in capsys.readouterr().out
+    output = capsys.readouterr().out
+    assert "persist" in output
+    assert "put FILE user@host" in output
     monkeypatch.setattr(tssh, "_request", lambda payload, timeout: {"ok": True, "endpoints": []})
     assert tssh.main(["list"]) == 0
     assert "no active" in capsys.readouterr().out

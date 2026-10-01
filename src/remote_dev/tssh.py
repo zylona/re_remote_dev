@@ -24,11 +24,13 @@ try:
     from .file_transfer import EndpointIdentity
     from .download import DownloadManager, EndpointConnection
     from .preview_bridge import PreviewBridge, new_context
+    from .upload import UploadConnection, UploadError, put_file
 except ImportError:  # Direct ``python src/remote_dev/tssh.py`` development entrypoint.
     from remote_dev.lease_config import load as load_lease_settings
     from remote_dev.file_transfer import EndpointIdentity
     from remote_dev.download import DownloadManager, EndpointConnection
     from remote_dev.preview_bridge import PreviewBridge, new_context
+    from remote_dev.upload import UploadConnection, UploadError, put_file
 
 
 def _version() -> str:
@@ -214,6 +216,33 @@ def _persist(raw: list[str], stop: bool = False) -> int:
     return 0
 
 
+def _put(raw: list[str]) -> int:
+    parser = argparse.ArgumentParser(prog="tssh put", description="上传本地文件到远程固定目录")
+    parser.add_argument("local_path", help="本地普通文件路径")
+    parser.add_argument("destination", help="目标，格式为 user@host 或 host")
+    parser.add_argument("-i", "--identity", help="SSH 私钥路径")
+    parser.add_argument("-p", "--port", type=int, default=22, help="SSH 端口")
+    args = parser.parse_args(raw[1:])
+    if not 1 <= args.port <= 65535:
+        parser.error("SSH 端口必须位于 1-65535")
+    try:
+        user, host = _parse_destination(args.destination)
+    except ValueError as exc:
+        parser.error(str(exc))
+    local_path = Path(args.local_path).expanduser()
+    identity = _resolve_identity(args.destination, args.identity)
+    print(f"tssh put: {local_path.resolve()}")
+    print(f"目标：{user}@{host}:{args.port}")
+    print("远程目录：~/Uploads/remote-dev")
+    try:
+        remote_path = put_file(UploadConnection(host, args.port, user, identity), local_path)
+    except (UploadError, OSError, subprocess.SubprocessError) as exc:
+        print(f"tssh put: {exc}", file=sys.stderr)
+        return 1
+    print(f"远程路径：{remote_path}")
+    return 0
+
+
 def _parse_destination(value: str) -> tuple[str, str]:
     if "@" in value:
         user, host = value.split("@", 1)
@@ -352,12 +381,14 @@ def _resolve_identity(destination: str, explicit: str | None) -> str | None:
 def main(argv: list[str] | None = None) -> int:
     raw_argv = list(argv if argv is not None else os.sys.argv[1:])
     if not raw_argv or raw_argv == ["help"] or raw_argv == ["--help"]:
-        print("用法：tssh user@host [SSH 参数]\n\n管理命令：\n  tssh list                         查看代理 endpoint\n  tssh downloads                    查看 rget/rdo 下载进度\n  tssh persist user@host [-i KEY]  后台持久保持代理\n  tssh stop user@host              关闭指定持久代理\n  tssh cleanup                     清理全部会话级代理\n  tssh --version                   查看版本")
+        print("用法：tssh user@host [SSH 参数]\n\n管理命令：\n  tssh list                         查看代理 endpoint\n  tssh downloads                    查看 rget/rdo 下载进度\n  tssh put FILE user@host          上传到 ~/Uploads/remote-dev\n  tssh persist user@host [-i KEY]  后台持久保持代理\n  tssh stop user@host              关闭指定持久代理\n  tssh cleanup                     清理全部会话级代理\n  tssh --version                   查看版本")
         return 0
     if raw_argv[0] == "list":
         return _status()
     if raw_argv[0] in {"downloads", "download-status"}:
         return _downloads_status()
+    if raw_argv[0] == "put":
+        return _put(raw_argv)
     if raw_argv[0] == "persist":
         return _persist(raw_argv)
     if raw_argv[0] == "stop":

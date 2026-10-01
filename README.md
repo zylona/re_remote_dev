@@ -137,6 +137,7 @@ tssh user@host -i ~/.ssh/id_ed25519
 tssh --version
 tssh list
 tssh downloads
+tssh put ./report.pdf user@host
 tssh persist user@host
 tssh stop user@host
 tssh cleanup
@@ -153,6 +154,16 @@ tssh cleanup
 `rget`/`rdo` 会在当前终端显示友好的进度条，并保持命令直到缓存命中、下载完成或失败；
 不会要求重复执行命令。大文件传输中断后，下一次请求会自动复用匹配的 `.part` 文件继续下载。
 `tssh downloads` 可查看当前用户仍在运行或最近完成的传输状态，包括已传输字节、速度和预计剩余时间。
+
+上传文件使用 `tssh put`，文件会写入目标用户固定目录 `~/Uploads/remote-dev/`：
+
+```bash
+tssh put ./report.pdf user@host
+tssh put ./build/output.tar.gz user@host -i ~/.ssh/id_ed25519
+```
+
+上传使用 SFTP 断点续传和临时文件，完成后原子替换目标文件；大文件会显示进度、速度和
+预计剩余时间。该命令只接受普通本地文件，不支持上传目录。
 
 - 目标 `127.0.0.1:4227` ← 本机 `127.0.0.1:4227`：HTTP 代理；
 - 目标 `127.0.0.1:4228` ← 本机 `127.0.0.1:4230`：Codex OAuth/事件回调。
