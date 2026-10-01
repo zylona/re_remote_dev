@@ -88,6 +88,23 @@ def test_endpoint_acquire_is_idempotent_and_release_keeps_other_session():
     listener.close()
 
 
+def test_last_lease_release_finishes_oauth_forward(monkeypatch, tmp_path):
+    listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    server = OrchestratorServer(listener, None)
+    finished = []
+    monkeypatch.setattr(server.oauth, "finish", lambda target=None: finished.append(target) or True)
+    endpoint = {"hostname": "host", "port": 22}
+    server.handle({
+        "op": "acquire",
+        "endpoint": endpoint,
+        "candidate": {"user": "u", "identity_file": str(tmp_path / "id")},
+        "session_id": "oauth-session",
+    })
+    server.handle({"op": "release", "endpoint": endpoint, "session_id": "oauth-session"})
+    assert finished and finished[-1] == TargetKey("host", 22, "u")
+    listener.close()
+
+
 def test_preview_context_is_attached_to_live_lease_and_cleared_on_release():
     listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     server = OrchestratorServer(listener, None)

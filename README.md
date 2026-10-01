@@ -7,7 +7,7 @@
 
 用一次受控运行，把一台可 SSH 登录的 Linux 主机恢复成现代远程开发环境：zsh、Antidote、Powerlevel10k、mise、fzf、zoxide、Zellij、Neovim 和 Codex CLI。项目采用 Ansible-first 设计，支持无外网目标机的临时 HTTP 代理，并保持普通 `ssh user@host` 的原生连接体验。
 
-> 当前发布版本：`v0.1.18`。已在 Debian 13、Arch/Omarchy 和 openEuler 24.03 上完成真实回归，包含多窗口、多用户共享隧道、断线恢复和 30 分钟连续观察。默认不安装远端常驻 Agent、不开放公网端口、不保存密码或 API Token。
+> 当前发布版本：`v0.1.19`。已在 Debian 13、Arch/Omarchy 和 openEuler 24.03 上完成真实回归，包含多窗口、多用户共享隧道、断线恢复和 30 分钟连续观察。默认不安装远端常驻 Agent、不开放公网端口、不保存密码或 API Token。
 
 ## 特性
 
@@ -179,14 +179,14 @@ lease_ttl = 3
 `lease_ttl` 必须大于两个 heartbeat 间隔；无效值会回退到默认值。该配置只包含时序参数，
 不保存密码、私钥或代理凭据。
 
-也可以从 [v0.1.18 Release](https://github.com/zylona/re_remote_dev/releases/tag/v0.1.18) 下载完整本地集成制品。生产环境建议固定版本并校验 SHA256：
+也可以从 [v0.1.19 Release](https://github.com/zylona/re_remote_dev/releases/tag/v0.1.19) 下载完整本地集成制品。生产环境建议固定版本并校验 SHA256：
 
 ```bash
-curl -fLO https://github.com/zylona/re_remote_dev/releases/download/v0.1.18/remote-dev-orchestrator-v0.1.18-linux.tar.gz
-curl -fLO https://github.com/zylona/re_remote_dev/releases/download/v0.1.18/remote-dev-orchestrator-v0.1.18-linux.tar.gz.sha256
-sha256sum -c remote-dev-orchestrator-v0.1.18-linux.tar.gz.sha256
-tar -xzf remote-dev-orchestrator-v0.1.18-linux.tar.gz
-./remote-dev-orchestrator-v0.1.18-linux/install
+curl -fLO https://github.com/zylona/re_remote_dev/releases/download/v0.1.19/remote-dev-orchestrator-v0.1.19-linux.tar.gz
+curl -fLO https://github.com/zylona/re_remote_dev/releases/download/v0.1.19/remote-dev-orchestrator-v0.1.19-linux.tar.gz.sha256
+sha256sum -c remote-dev-orchestrator-v0.1.19-linux.tar.gz.sha256
+tar -xzf remote-dev-orchestrator-v0.1.19-linux.tar.gz
+./remote-dev-orchestrator-v0.1.19-linux/install
 ```
 
 安装器会迁移并备份旧版 `# >>> remote-dev ssh integration >>>` 标记区块，但默认不再写入全局
@@ -196,7 +196,7 @@ tar -xzf remote-dev-orchestrator-v0.1.18-linux.tar.gz
 已安装版本可以使用制品内的 `rollback VERSION` 回滚：
 
 ```bash
-./remote-dev-orchestrator-v0.1.18-linux/rollback 0.1.10
+./remote-dev-orchestrator-v0.1.19-linux/rollback 0.1.10
 ```
 
 VS Code Remote‑SSH 默认直接使用普通的 `~/.ssh/config`。安装器不会生成或维护

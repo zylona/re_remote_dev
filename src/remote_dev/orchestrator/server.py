@@ -329,6 +329,10 @@ class OrchestratorServer:
                 target_status = self.targets.get(target.digest)
                 if target_status is not None:
                     if target_status.session_count <= 1:
+                        try:
+                            self.oauth.finish(target)
+                        except OAuthError:
+                            pass
                         self.targets.pop(target.digest, None)
                         self._identity_files.pop(target.digest, None)
                     else:
@@ -348,6 +352,10 @@ class OrchestratorServer:
                 return {"ok": True, "released": True}
             record["session_count"] = max(0, int(record["session_count"]) - 1)
             if record["session_count"] == 0:
+                try:
+                    self.oauth.finish(TargetKey(str(endpoint.hostname), int(endpoint.port), str(previous["user"])))
+                except OAuthError:
+                    pass
                 try:
                     self.endpoint_forwarder.stop(endpoint, previous.get("user"))
                 except (OSError, RuntimeError, ValueError, subprocess.SubprocessError):
@@ -390,9 +398,16 @@ class OrchestratorServer:
             if not isinstance(endpoint_data, dict):
                 continue
             try:
+                endpoint_key = EndpointKey(str(endpoint_data["hostname"]), int(endpoint_data["port"]))
+                owner = record.get("owner")
+                if isinstance(owner, str) and owner:
+                    try:
+                        self.oauth.finish(TargetKey(endpoint_key.hostname, endpoint_key.port, owner))
+                    except OAuthError:
+                        pass
                 self.endpoint_forwarder.stop(
-                    EndpointKey(str(endpoint_data["hostname"]), int(endpoint_data["port"])),
-                    record.get("owner"),
+                    endpoint_key,
+                    owner,
                 )
                 stopped += 1
             except (OSError, RuntimeError, ValueError, subprocess.SubprocessError):
