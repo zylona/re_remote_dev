@@ -20,7 +20,7 @@ def classify_failure(message: str) -> str:
         return "SSH_AUTH_FAILED"
     if re.search(r"administratively prohibited|forwarding.*denied|open failed", text):
         return "FORWARDING_DENIED"
-    if re.search(r"address already in use|cannot listen|port.*busy", text):
+    if re.search(r"address already in use|cannot listen|port.*busy|remote port forwarding failed|remote 4227 .*占用|4227.*占用|占用.*4227", text):
         return "REMOTE_PORT_BUSY"
     if re.search(r"timed out|connection refused|network is unreachable|no route|unreachable", text):
         return "REMOTE_UNREACHABLE"

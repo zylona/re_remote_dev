@@ -51,6 +51,18 @@ for legacy_unit in "$unit_dir"/remote-dev-master-*.service; do
   systemctl --user disable --now "$(basename "$legacy_unit")" 2>/dev/null || true
   rm -f "$legacy_unit"
 done
+# Persistent proxy units created by older releases were installed into
+# default.target.wants and therefore came back after every login/boot.  The
+# current contract is boot-scoped persistence: keep a running unit alive, but
+# remove only tssh-managed enablement links so it will not be resurrected
+# automatically after reboot.  Do not stop the unit during an upgrade.
+session_wants_dir="$unit_dir/default.target.wants"
+for session_link in "$session_wants_dir"/tssh-session-*.service; do
+  [ -L "$session_link" ] || continue
+  session_unit="$(basename "$session_link")"
+  systemctl --user disable "$session_unit" 2>/dev/null || true
+  rm -f "$session_link"
+done
 shopt -u nullglob
 systemctl --user enable --now tssh.socket
 systemctl --user restart tssh.service

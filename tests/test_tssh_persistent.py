@@ -26,3 +26,20 @@ def test_persistent_command_prefers_release_wrapper(monkeypatch, tmp_path):
     assert command[0] == str(wrapper)
     assert command[1:3] == ["--persistent-run", "user@example"]
     assert command[-2:] == ["--port", "2200"]
+
+
+def test_persistent_unit_is_boot_scoped_not_enabled(monkeypatch):
+    command = ["/home/user/.local/bin/tssh", "--persistent-run", "u@h"]
+    text = tssh._persistent_unit_text("h", command)
+    assert "Before=shutdown.target" in text
+    assert "Conflicts=shutdown.target" in text
+    assert "KillMode=control-group" in text
+    assert "TimeoutStopSec=8" in text
+    assert "WantedBy=default.target" not in text
+
+
+def test_release_installer_removes_legacy_persistent_enablement():
+    text = (Path(__file__).parents[1] / "release/install").read_text(encoding="utf-8")
+    assert 'default.target.wants' in text
+    assert 'tssh-session-*.service' in text
+    assert 'systemctl --user disable "$session_unit"' in text

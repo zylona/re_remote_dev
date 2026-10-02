@@ -4,17 +4,80 @@ from __future__ import annotations
 
 import shlex
 import subprocess
+from dataclasses import dataclass
 from pathlib import Path
 
 from .model import TargetKey
+
+
+@dataclass(frozen=True)
+class RemoteProxyProbe:
+    """Read-only result for the fixed remote 4227 listener."""
+
+    state: str  # free, healthy, occupied, unavailable, unreachable
+    detail: str = ""
+
+
+def probe_remote_proxy(target: TargetKey, identity: Path, *, timeout: float = 8.0) -> RemoteProxyProbe:
+    """Classify an existing remote 4227 listener without changing remote state.
+
+    A healthy listener is safe to reuse.  A listener which accepts TCP but does
+    not complete an HTTP proxy request is classified as occupied rather than
+    blindly replaced; the owner may be another controller/user.  The probe is
+    deliberately best-effort so a target without curl does not block normal
+    SSH forwarding startup.
+    """
+    remote_probe = (
+        "if ! command -v curl >/dev/null 2>&1; then printf 'UNAVAILABLE\\n'; exit 0; fi; "
+        "curl -sS -o /dev/null -I --proxy http://127.0.0.1:4227 "
+        "--connect-timeout 2 --max-time 4 http://example.com >/dev/null 2>&1; "
+        "rc=$?; case $rc in 0|3|22) printf 'HEALTHY\\n' ;; "
+        "7) printf 'FREE\\n' ;; *) printf 'OCCUPIED\\n' ;; esac"
+    )
+    command = [
+        "/usr/bin/ssh", "-F", "/dev/null", "-T",
+        "-o", "BatchMode=yes", "-o", "ConnectTimeout=5",
+        "-o", "ConnectionAttempts=1", "-o", "ServerAliveInterval=3",
+        "-o", "ServerAliveCountMax=1", "-i", str(identity.expanduser()),
+        "-p", str(target.port), f"{target.user}@{target.hostname}",
+        "sh", "-c", remote_probe,
+    ]
+    try:
+        result = subprocess.run(command, check=False, capture_output=True, text=True, timeout=timeout)
+    except (OSError, subprocess.SubprocessError) as exc:
+        return RemoteProxyProbe("unreachable", type(exc).__name__)
+    if result.returncode != 0:
+        detail = (result.stderr or "").lower()
+        if "permission denied" in detail or "publickey" in detail:
+            return RemoteProxyProbe("unreachable", "SSH_AUTH_FAILED")
+        return RemoteProxyProbe("unreachable", "SSH_UNREACHABLE")
+    marker = result.stdout.strip().splitlines()[-1] if result.stdout.strip() else "UNAVAILABLE"
+    return {
+        "HEALTHY": RemoteProxyProbe("healthy"),
+        "FREE": RemoteProxyProbe("free"),
+        "OCCUPIED": RemoteProxyProbe("occupied", "remote 4227 accepts connections but proxy request timed out"),
+    }.get(marker, RemoteProxyProbe("unavailable", marker))
+
+
+def unit_path(target: TargetKey, *, systemd_dir: Path | None = None) -> Path:
+    directory = systemd_dir or (Path.home() / ".config/systemd/user")
+    return directory / unit_name(target)
 
 
 def unit_name(target: TargetKey) -> str:
     return f"remote-dev-proxy-{target.endpoint_digest}.service"
 
 
-def unit_text(target: TargetKey, identity: Path, *, event_forward: bool = True) -> str:
-    forwards = ["-R", "127.0.0.1:4227:127.0.0.1:4227"]
+def unit_text(
+    target: TargetKey,
+    identity: Path,
+    *,
+    event_forward: bool = True,
+    proxy_forward: bool = True,
+) -> str:
+    forwards: list[str] = []
+    if proxy_forward:
+        forwards.extend(["-R", "127.0.0.1:4227:127.0.0.1:4227"])
     if event_forward:
         forwards.extend(["-R", "127.0.0.1:4228:127.0.0.1:4230"])
     command = shlex.join([
@@ -44,11 +107,18 @@ TasksMax=8
 """
 
 
-def ensure(target: TargetKey, identity: Path, *, event_forward: bool = True, systemd_dir: Path | None = None) -> Path:
+def ensure(
+    target: TargetKey,
+    identity: Path,
+    *,
+    event_forward: bool = True,
+    proxy_forward: bool = True,
+    systemd_dir: Path | None = None,
+) -> Path:
     directory = systemd_dir or (Path.home() / ".config/systemd/user")
     directory.mkdir(parents=True, exist_ok=True, mode=0o700)
-    path = directory / unit_name(target)
-    content = unit_text(target, identity, event_forward=event_forward)
+    path = unit_path(target, systemd_dir=directory)
+    content = unit_text(target, identity, event_forward=event_forward, proxy_forward=proxy_forward)
     changed = not path.exists() or path.read_text(encoding="utf-8") != content
     active = subprocess.run(["systemctl", "--user", "is-active", "--quiet", path.name], check=False).returncode == 0
     path.write_text(content, encoding="utf-8")

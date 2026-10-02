@@ -65,6 +65,10 @@ tssh cleanup # 清理全部会话级代理
 `persist` 只建立远端 `4227` HTTP 代理；`4228→4230` 是 Codex 回调通道，仅由普通交互式
 `tssh user@host` 会话按需启用。
 
+持久 unit 只在当前开机周期启动，不再 enable 到 `default.target`；关机时由 systemd 停止，
+下次开机必须重新执行 `tssh persist`。启动前会清理本机失效 unit 并探测远端 4227：健康监听
+直接复用，疑似旧连接只报告 `REMOTE_PORT_BUSY`，不会无确认地杀掉未知 SSH 会话。
+
 `tssh put` 使用每次请求独立的临时 SSH ControlMaster，目录创建、SFTP 上传和进度查询均
 复用该连接，完成或失败后自动关闭。目标文件统一写入 `~/Uploads/remote-dev/`；存在匹配
 的 `.tssh-part` 时按已有大小续传，成功后原子替换正式文件。上传不使用 4227/4228，也不

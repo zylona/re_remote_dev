@@ -184,6 +184,15 @@ def _persistent_command(destination: str, identity: str | None, port: int) -> li
     return args
 
 
+def _persistent_unit_text(host: str, command: list[str]) -> str:
+    """Render a boot-scoped persistent lease unit.
+
+    It is intentionally not enabled in ``default.target``.  ``persist`` is
+    an explicit action for the current boot; users opt in again after reboot.
+    """
+    return """[Unit]\nDescription=tssh persistent proxy (%s)\nAfter=network-online.target\nWants=network-online.target\nBefore=shutdown.target\nConflicts=shutdown.target\n\n[Service]\nType=simple\nExecStart=%s\nRestart=on-failure\nRestartSec=10\nKillMode=control-group\nTimeoutStopSec=8\nNoNewPrivileges=yes\nMemoryMax=64M\nTasksMax=16\n""" % (host, shlex.join(command))
+
+
 def _persist(raw: list[str], stop: bool = False) -> int:
     parser = argparse.ArgumentParser(prog=f"tssh {'stop' if stop else 'persist'}")
     parser.add_argument("destination", help="目标，格式为 user@host 或 host")
@@ -207,11 +216,45 @@ def _persist(raw: list[str], stop: bool = False) -> int:
     identity = _resolve_identity(args.destination, args.identity)
     command = _persistent_command(args.destination, identity, args.port)
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-    path.write_text("""[Unit]\nDescription=tssh persistent proxy (%s)\nAfter=network-online.target\nWants=network-online.target\n\n[Service]\nType=simple\nExecStart=%s\nRestart=on-failure\nRestartSec=10\nNoNewPrivileges=yes\nMemoryMax=64M\nTasksMax=16\n\n[Install]\nWantedBy=default.target\n""" % (host, shlex.join(command)), encoding="utf-8")
+    path.write_text(_persistent_unit_text(host, command), encoding="utf-8")
     path.chmod(0o600)
     subprocess.run(["systemctl", "--user", "daemon-reload"], check=True)
-    subprocess.run(["systemctl", "--user", "enable", "--now", name], check=True)
-    print(f"tssh: 已启用持久代理 {user}@{host}:{args.port}")
+    # Remove the legacy default.target symlink if this endpoint was created by
+    # an older release, but do not stop an already-running proxy during a
+    # refresh.  The unit is intentionally start-only for the current boot.
+    legacy_link = path.parent / "default.target.wants" / name
+    if legacy_link.exists() or legacy_link.is_symlink():
+        subprocess.run(["systemctl", "--user", "disable", name], check=False)
+    subprocess.run(["systemctl", "--user", "start", name], check=True)
+    # systemd can report a successfully started lease process before the
+    # orchestrator has attempted the remote bind.  Give that short handshake
+    # a bounded window, then refuse to leave a retrying broken unit behind.
+    digest = _endpoint_digest(host, args.port)
+    observed: dict[str, Any] | None = None
+    deadline = time.monotonic() + 3.0
+    while time.monotonic() < deadline:
+        try:
+            status = _request({"op": "status"}, 1.0)
+        except (OSError, TimeoutError, ValueError, ConnectionError):
+            status = {}
+        endpoints = status.get("endpoints", []) if isinstance(status, dict) else []
+        observed = next(
+            (item for item in endpoints if isinstance(item, dict) and item.get("endpoint_digest") == digest),
+            None,
+        )
+        if observed is not None:
+            break
+        time.sleep(0.15)
+    if observed is None or str(observed.get("state", "")).upper() == "DEGRADED":
+        subprocess.run(["systemctl", "--user", "disable", "--now", name], check=False)
+        path.unlink(missing_ok=True)
+        subprocess.run(["systemctl", "--user", "daemon-reload"], check=False)
+        error = (observed or {}).get("last_error") or "编排器未确认远端 4227 转发已就绪"
+        print(f"tssh: 持久代理未建立：{error}", file=sys.stderr)
+        print("      未自动终止未知的远端 SSH 连接；确认归属后可重试 tssh persist。", file=sys.stderr)
+        return 1
+    print(f"tssh: 已启用本次开机周期的持久代理 {user}@{host}:{args.port}")
+    print("      重启后不会自动恢复，需要再次执行 tssh persist")
     print(f"      unit: {name}")
     return 0
 
@@ -432,7 +475,12 @@ def main(argv: list[str] | None = None) -> int:
                 # If its socket service was restarted, re-acquire this still
                 # live tssh process instead of leaving it with a dead tunnel.
                 if response.get("error") == "LEASE_CLEARED":
-                    return
+                    retry = {"op": "acquire", "endpoint": endpoint, "candidate": candidate, "session_id": session_id}
+                    if args.persistent_run:
+                        retry["event_forward"] = False
+                        retry["persistent"] = True
+                    _request(retry, 5)
+                    continue
                 if not response.get("ok"):
                     retry = {"op": "acquire", "endpoint": endpoint, "candidate": candidate, "session_id": session_id}
                     if args.persistent_run:
@@ -461,6 +509,10 @@ def main(argv: list[str] | None = None) -> int:
         acquired = _request(acquire_payload, 5)
         if not acquired.get("ok"):
             print(f"tssh: 无法申请代理会话：{acquired.get('error', 'unknown')}", file=os.sys.stderr)
+            return 1
+        if str(acquired.get("state", "")).upper() == "DEGRADED":
+            print(f"tssh: 代理转发未就绪：{acquired.get('last_error', 'REMOTE_PORT_BUSY')}", file=os.sys.stderr)
+            print("      未自动终止未知的远端 SSH 连接；请确认占用归属后重试。", file=os.sys.stderr)
             return 1
         heartbeat_thread = threading.Thread(target=heartbeat, name="tssh-lease-heartbeat", daemon=True)
         heartbeat_thread.start()

@@ -50,7 +50,10 @@ Release 制品提供 `tssh` 作为独立的 SSH 入口。它不替换普通 `ssh
 共享一个 endpoint forwarder；最后一个 lease 释放后才清理隧道。
 
 Endpoint forwarder 是按 lease 创建的临时 user unit，不加入 `default.target`，也不会在没有
-`tssh` 会话时自启动。编排器启动时会清理上一进程遗留的 `remote-dev-proxy-*` unit；首个
+`tssh` 会话时自启动。`tssh persist` 只在当前开机周期启动一个未 enable 的 user unit；关机
+时由 `Before/Conflicts=shutdown.target` 和 `KillMode=control-group` 收敛，重启后不会自动恢复，
+用户需要再次执行 `tssh persist`。编排器启动时会清理上一进程遗留的 `remote-dev-proxy-*`
+unit；首个
 lease 启动隧道，最后一个 lease 释放时执行 `disable --now` 并删除 unit。owner 只是负责创建
 或接管隧道的候选凭据，owner 窗口退出但仍有其他 lease 时不会关闭健康隧道。
 
@@ -131,6 +134,15 @@ endpoint forwarder 失败时不会阻塞或关闭交互 SSH。编排器记录不
 `SSH_AUTH_FAILED`、`FORWARDING_DENIED`、`REMOTE_PORT_BUSY`、`REMOTE_UNREACHABLE` 和
 `LOCAL_PROXY_UNAVAILABLE`。systemd user unit 同时配置失败重启限流、内存上限和任务数上限，
 避免代理或编排器故障造成重启风暴。
+
+持久代理或编排器重启前会先做只读 reconcile：清理本机失效 unit，检查远端 4227 是否未
+监听、已有健康代理或被异常连接占用。健康的未知转发直接复用，不重复抢占；监听存在但
+HTTP 代理请求超时则标记为 `REMOTE_PORT_BUSY`，默认不杀远端未知 SSH 会话，避免影响其他
+控制端或用户。只有用户明确执行受控 reclaim 流程时，才允许进一步处理可确认属于本项目的
+旧连接。远端固定端口无法被普通 SSH 客户端安全强制替换，这是设计上的安全边界。
+
+普通交互式 `tssh` 使用相同的 reconcile：健康的远端 4227 不会被重复绑定，而是只创建本会话
+需要的 4228 事件转发；异常占用会在进入远程 Shell 前返回失败并移除本次创建的本地 unit。
 
 ## P6 可选长期会话
 
