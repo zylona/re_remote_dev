@@ -1,0 +1,15 @@
+---
+# SaladDay/cc-switch-cli is installed as a user-scoped static Linux binary.
+# Keep this pinned: changing it is an intentional release update.
+cc_switch_cli_version: "5.11.2"
+cc_switch_cli_install_dir: "{{ ansible_facts.user_dir }}/.local/bin"
+cc_switch_cli_cache_dir: "{{ ansible_facts.user_dir }}/.cache/remote-dev/cc-switch"
+cc_switch_cli_archive: "{{ cc_switch_cli_cache_dir }}/cc-switch-cli-{{ cc_switch_cli_version }}.tar.gz"
+cc_switch_cli_binary: "{{ cc_switch_cli_install_dir }}/cc-switch"
+cc_switch_cli_release_base_url: >-
+  https://github.com/SaladDay/cc-switch-cli/releases/download/v{{ cc_switch_cli_version }}
+cc_switch_cli_asset_name: >-
+  cc-switch-cli-v{{ cc_switch_cli_version }}-linux-{{ cc_switch_cli_arch }}-musl.tar.gz
+cc_switch_cli_arch: ""
+cc_switch_cli_sha256: ""
+cc_switch_cli_enabled: true

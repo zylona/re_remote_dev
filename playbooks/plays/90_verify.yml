@@ -63,6 +63,37 @@
           {{ 'READY' if codex_verify.rc == 0 and bubblewrap_verify.rc == 0 else
           ('READY_WITH_WARNINGS: 缺少 bubblewrap/bwrap' if codex_verify.rc == 0 else
           'FAILED: Codex CLI 未安装或不可执行；请先运行 site.yml') }}
+    - name: 探测 CC Switch CLI 的系统 CA bundle（只读）
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      loop:
+        - /etc/pki/tls/certs/ca-bundle.crt
+        - /etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem
+        - /etc/ssl/certs/ca-certificates.crt
+      register: cc_switch_ca_candidates
+      changed_when: false
+    - name: 选择 CC Switch CLI 的系统 CA bundle（只读）
+      ansible.builtin.set_fact:
+        cc_switch_verify_ca: >-
+          {{ (cc_switch_ca_candidates.results
+              | selectattr('stat.exists', 'equalto', true)
+              | selectattr('stat.isreg', 'equalto', true)
+              | map(attribute='item') | list | first) | default('') }}
+    - name: 验证 CC Switch CLI（只读）
+      ansible.builtin.command:
+        argv: [cc-switch, auth, status, --json]
+      register: cc_switch_verify
+      changed_when: false
+      failed_when: false
+      environment:
+        HOME: "{{ ansible_facts.user_dir }}"
+        PATH: "{{ ansible_facts.user_dir }}/.local/share/remote-dev/bin:{{ ansible_facts.user_dir }}/.local/bin:/usr/local/bin:/usr/bin:/bin"
+        SSL_CERT_FILE: "{{ cc_switch_verify_ca }}"
+    - name: 输出 CC Switch CLI 验收状态
+      ansible.builtin.debug:
+        msg: >-
+          {{ 'READY' if cc_switch_verify.rc == 0 else
+          'READY_WITH_WARNINGS: CC Switch CLI 已安装但 auth status 不可用；请在目标会话中执行 cc-switch auth login' }}
     - name: 验证 Neovim 配置加载（只读）
       ansible.builtin.command:
         argv: [timeout, 60, nvim, --headless, -u, "{{ ansible_facts.user_dir }}/.config/nvim/init.lua", "+qa!"]

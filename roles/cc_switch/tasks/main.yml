@@ -1,0 +1,87 @@
+---
+- name: CC Switch CLI 安装开关
+  ansible.builtin.assert:
+    that: cc_switch_cli_enabled | bool
+    fail_msg: "CC Switch CLI 已被配置为禁用。"
+
+- name: 识别 CC Switch CLI 架构
+  ansible.builtin.set_fact:
+    cc_switch_cli_arch: >-
+      {{ {'x86_64': 'x64', 'amd64': 'x64', 'aarch64': 'arm64', 'arm64': 'arm64'}
+         .get(ansible_facts.architecture, '') }}
+
+- name: 拒绝不支持的 CC Switch CLI 架构
+  ansible.builtin.assert:
+    that: cc_switch_cli_arch | length > 0
+    fail_msg: >-
+      CC Switch CLI 暂不提供目标架构 {{ ansible_facts.architecture }} 的 Linux musl 制品；
+      支持 x86_64/amd64 和 aarch64/arm64。
+
+- name: 设置 CC Switch CLI 制品校验和
+  ansible.builtin.set_fact:
+    cc_switch_cli_sha256: >-
+      {{ {'x64': 'bb0255e37894c47f0bea721605c2f02ac7a69d699011bb1636db751e175d2baa',
+          'arm64': 'd05995c7ef58196cd65dd4d5579ceb4405bdee4d0f68c8ef58722b9ff50c3a12'}
+         [cc_switch_cli_arch] }}
+
+- name: 创建 CC Switch CLI 用户目录
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: "{{ remote_dev.target_user }}"
+    mode: '0755'
+  loop:
+    - "{{ cc_switch_cli_install_dir }}"
+    - "{{ cc_switch_cli_cache_dir }}"
+
+- name: 下载固定版本 CC Switch CLI
+  ansible.builtin.get_url:
+    url: "{{ cc_switch_cli_release_base_url }}/{{ cc_switch_cli_asset_name }}"
+    dest: "{{ cc_switch_cli_archive }}"
+    checksum: "sha256:{{ cc_switch_cli_sha256 }}"
+    owner: "{{ remote_dev.target_user }}"
+    mode: '0644'
+  environment:
+    http_proxy: "{{ remote_dev_temp_proxy_url | default(omit) }}"
+    https_proxy: "{{ remote_dev_temp_proxy_url | default(omit) }}"
+    HTTP_PROXY: "{{ remote_dev_temp_proxy_url | default(omit) }}"
+    HTTPS_PROXY: "{{ remote_dev_temp_proxy_url | default(omit) }}"
+
+- name: 解压 CC Switch CLI 制品
+  ansible.builtin.unarchive:
+    src: "{{ cc_switch_cli_archive }}"
+    dest: "{{ cc_switch_cli_cache_dir }}"
+    remote_src: true
+    owner: "{{ remote_dev.target_user }}"
+    mode: '0755'
+    creates: "{{ cc_switch_cli_cache_dir }}/cc-switch"
+
+- name: 安装 CC Switch CLI 到用户 PATH
+  ansible.builtin.copy:
+    src: "{{ cc_switch_cli_cache_dir }}/cc-switch"
+    dest: "{{ cc_switch_cli_binary }}"
+    remote_src: true
+    owner: "{{ remote_dev.target_user }}"
+    mode: '0755'
+
+- name: 清理旧版 CC Switch CLI 包装器
+  ansible.builtin.file:
+    path: "{{ ansible_facts.user_dir }}/.local/share/remote-dev/bin/cc-switch"
+    state: absent
+
+- name: 验证 CC Switch CLI
+  ansible.builtin.command:
+    argv: ["{{ cc_switch_cli_binary }}", --version]
+  environment:
+    HOME: "{{ ansible_facts.user_dir }}"
+    PATH: "{{ cc_switch_cli_install_dir }}:/usr/local/bin:/usr/bin:/bin"
+  register: cc_switch_cli_version_check
+  changed_when: false
+  failed_when: false
+
+- name: CC Switch CLI 验证失败时停止恢复
+  ansible.builtin.assert:
+    that: cc_switch_cli_version_check.rc == 0
+    fail_msg: >-
+      CC Switch CLI 未能正常启动（{{ cc_switch_cli_version_check.stderr | default('无错误输出') }}）。
+      请检查目标架构、代理和 {{ cc_switch_cli_binary }} 权限。

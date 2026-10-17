@@ -12,6 +12,9 @@ for candidate in "$HOME/.local/bin/codex" "$HOME/.codex/packages/standalone/curr
     break
   fi
 done
+# CC Switch is intentionally not injected here. `tcodex` is the project-owned
+# OAuth/callback entrypoint; account selection remains explicit through the
+# official CC Switch TUI/commands and never changes the official `codex` binary.
 event_sender={{ codex_libexec_dir | quote }}/remote-dev-codex-event.py
 pty_runner={{ codex_libexec_dir | quote }}/remote-dev-codex-pty.py
 target={{ codex_target_digest | default('unknown') | quote }}

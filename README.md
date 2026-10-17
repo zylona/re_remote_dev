@@ -5,7 +5,7 @@
 [![License](https://img.shields.io/github/license/zylona/re_remote_dev)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Linux-333?logo=linux)](#支持范围)
 
-用一次受控运行，把一台可 SSH 登录的 Linux 主机恢复成现代远程开发环境：zsh、Antidote、Powerlevel10k、mise、fzf、zoxide、Zellij、Neovim 和 Codex CLI。项目采用 Ansible-first 设计，支持无外网目标机的临时 HTTP 代理，并保持普通 `ssh user@host` 的原生连接体验。
+用一次受控运行，把一台可 SSH 登录的 Linux 主机恢复成现代远程开发环境：zsh、Antidote、Powerlevel10k、mise、fzf、zoxide、Zellij、Neovim、Codex CLI 和 CC Switch CLI。项目采用 Ansible-first 设计，支持无外网目标机的临时 HTTP 代理，并保持普通 `ssh user@host` 的原生连接体验。
 
 > 当前发布版本：`v0.1.27`。已在 Debian 13、Arch/Omarchy 和 openEuler 24.03 上完成真实回归，包含多窗口、多用户共享隧道、断线恢复和 30 分钟连续观察。默认不安装远端常驻 Agent、不开放公网端口、不保存密码或 API Token。
 
@@ -17,6 +17,7 @@
 - **Omarchy 快捷入口**：远端交互式 zsh 提供 `n` 函数；无参数执行 `nvim .`，带参数时原样传给 Neovim。
 - **多窗口稳定性**：Zellij 默认，tmux fallback；持久 ControlMaster 专用于代理/事件转发，普通 SSH 窗口使用独立连接，避免 Codex 流量拖慢终端输入。
 - **受控代理**：把控制端 `127.0.0.1:4227` 临时转发到目标机 loopback，失败和退出自动清理。
+- **多 Codex 账号**：远端安装固定版本的 CC Switch CLI，账号数据按目标用户隔离，不复制本机桌面账号。
 - **可验证、可重跑**：固定 Play 顺序、独立只读 verify、第二次 apply 幂等检查。
 - **可发布制品**：完整本地集成包可作为 GitHub Release tarball 独立安装和升级。
 
@@ -192,6 +193,27 @@ SSH 或 VS Code 连接；已经运行的 tssh 终端也不会被强制关闭，�
 远程恢复会额外安装稳定的 `tcodex` 入口。官方 `codex` 命令保持原样，继续由官方安装器和
 自更新机制管理；`tcodex` 负责 tssh 代理、OAuth 回调转发和本地浏览器启动。项目目录位于
 `~/.local/share/remote-dev/bin`，优先级高于官方 `~/.local/bin`，因此 Codex 更新不会覆盖它。
+
+恢复流程还会安装用户级 `cc-switch` CLI（固定版本、静态 Linux 制品）。直接运行 `cc-switch`
+进入终端 TUI，用于在远端登录、管理和查看多个 Codex 托管账号：
+
+> 当前能力边界：CC Switch CLI/TUI 尚不能实现 GUI 同等的原生 Codex 多账号快速切换。
+> 托管账号可以登录、查看和查询状态，但 `OpenAI Official` 目前不能分别绑定账号 A/B。
+
+```bash
+cc-switch                         # 启动 TUI
+cc-switch auth list                # 可选：只读查看账号
+cc-switch auth status              # 可选：只读查看认证状态
+cc-switch --app codex provider list
+cc-switch --app codex provider current
+```
+
+CC Switch 不会复制本机桌面账号数据，也不会启用额外的模型代理。项目不修改 CC Switch
+二进制，也不把它隐式注入 `tcodex`；详见
+[远端 CC Switch CLI 使用说明](docs/capabilities/cc-switch-cli.md)。
+
+账号登录、托管状态和当前版本的使用边界，见
+[CC Switch TUI 使用说明](docs/capabilities/cc-switch-cli.md)。
 
 持久代理只在当前开机周期有效：它不会加入 user `default.target`，重启后不会自动连接，
 需要时再次执行 `tssh persist user@host`。启动时会自动清理本机失效 unit，并只读检查远端

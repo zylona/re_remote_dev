@@ -123,6 +123,17 @@
       # tcodex is project-owned and must stay ahead of the official codex
       # entrypoint, which the official updater may replace at any time.
       export PATH="$HOME/.local/share/remote-dev/bin:$HOME/.local/bin:$PATH"
+      # Rust-based CLIs need a regular CA bundle on some enterprise images.
+      # This changes only the user environment; the upstream binaries remain
+      # unmodified and Debian's normal CA path is still preferred.
+      if [[ -z "${SSL_CERT_FILE:-}" ]]; then
+        for cert in /etc/pki/tls/certs/ca-bundle.crt /etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem /etc/ssl/certs/ca-certificates.crt; do
+          if [[ -f "$cert" ]]; then
+            export SSL_CERT_FILE="$cert"
+            break
+          fi
+        done
+      fi
       # Omarchy-compatible quick Neovim entrypoint: `n` opens the current
       # directory, while arguments are passed through to nvim unchanged.
       n() {

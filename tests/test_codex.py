@@ -14,6 +14,29 @@ def test_codex_role_uses_official_staged_installer() -> None:
     assert "CODEX_NON_INTERACTIVE" in tasks
 
 
+def test_cc_switch_cli_is_pinned_and_user_scoped() -> None:
+    defaults = (ROOT / "roles/cc_switch/defaults/main.yml").read_text(encoding="utf-8")
+    tasks = (ROOT / "roles/cc_switch/tasks/main.yml").read_text(encoding="utf-8")
+    docs = (ROOT / "docs/capabilities/cc-switch-cli.md").read_text(encoding="utf-8")
+    assert 'cc_switch_cli_version: "5.11.2"' in defaults
+    assert "checksum: \"sha256:{{ cc_switch_cli_sha256 }}\"" in tasks
+    assert "cc_switch_cli_asset_name" in defaults
+    assert "cc_switch_cli_release_base_url" in defaults
+    assert 'url: "{{ cc_switch_cli_release_base_url }}/{{ cc_switch_cli_asset_name }}"' in tasks
+    assert "cc_switch_cli_install_dir: \"{{ ansible_facts.user_dir }}/.local/bin\"" in defaults
+    assert "cc_switch_cli_wrapper" not in defaults
+    assert "清理旧版 CC Switch CLI 包装器" in tasks
+    assert "cc-switch auth list" in docs
+    assert "cc-switch auth status" in docs
+    assert "cc-switch\n" in docs
+    assert "启动 TUI" in docs
+    assert "Set default" in docs
+    assert "--shared-sessions" in docs
+    assert "项目不修改其二进制" in docs
+    assert "provider quota" in docs
+    assert "codex logout" in docs
+
+
 def test_login_command_uses_official_device_auth_and_forwarding() -> None:
     cli = (ROOT / "src/remote_dev/cli.py").read_text(encoding="utf-8")
     assert 'def codex_login(' in cli
@@ -32,6 +55,9 @@ def test_codex_role_deploys_non_blocking_lifecycle_shim() -> None:
     assert '\nexec "$real"' not in shim  # shim must report exit and preserve status
     assert 'timeout=0.15' in sender
     assert 'except (OSError, ValueError)' in sender
+    assert 'cc-switch start codex default' not in shim
+    assert 'CC Switch is intentionally not injected' in shim
+    assert 'OAuth/callback entrypoint' in shim
 
 
 def test_codex_lifecycle_entrypoint_is_separate_from_official_codex() -> None:

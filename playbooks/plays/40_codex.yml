@@ -6,3 +6,4 @@
   become_user: "{{ remote_dev.target_user }}"
   roles:
     - codex
+    - cc_switch
