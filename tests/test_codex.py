@@ -58,6 +58,8 @@ def test_codex_role_deploys_non_blocking_lifecycle_shim() -> None:
     assert 'cc-switch start codex default' not in shim
     assert 'CC Switch is intentionally not injected' in shim
     assert 'OAuth/callback entrypoint' in shim
+    assert '"$real" login status' in shim
+    assert 'auth.json' in shim
 
 
 def test_codex_lifecycle_entrypoint_is_separate_from_official_codex() -> None:
