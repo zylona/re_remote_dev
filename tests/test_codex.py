@@ -1,3 +1,4 @@
+import ast
 from pathlib import Path
 
 
@@ -43,3 +44,41 @@ def test_codex_lifecycle_entrypoint_is_separate_from_official_codex() -> None:
     assert 'official `codex` command remains untouched' in shim
     assert 'packages/standalone/current/bin/codex' in shim
     assert 'normal Codex self-updates' in shim
+
+
+def _load_oauth_parser():
+    """Load only the PTY parser definitions without starting a child PTY."""
+    source = (ROOT / "roles/codex/files/remote-dev-codex-pty.py").read_text(encoding="utf-8")
+    tree = ast.parse(source)
+    names = {"oauth_prefix", "oauth_candidate_re", "osc_hyperlink_re", "ansi_re"}
+    nodes = [
+        node
+        for node in tree.body
+        if isinstance(node, (ast.Import, ast.ImportFrom, ast.Assign, ast.FunctionDef))
+        and (
+            not isinstance(node, ast.Assign)
+            or any(isinstance(target, ast.Name) and target.id in names for target in node.targets)
+        )
+    ]
+    namespace: dict[str, object] = {}
+    exec(compile(ast.Module(body=nodes, type_ignores=[]), "codex-pty-parser", "exec"), namespace)
+    return namespace["_complete_oauth_urls"]
+
+
+def test_codex_pty_parser_accepts_encoded_raw_and_osc8_urls() -> None:
+    parse_urls = _load_oauth_parser()
+    query = (
+        "response_type=code&client_id=app_test&"
+        "redirect_uri={redirect}&scope=openid&code_challenge={challenge}&"
+        "code_challenge_method=S256&state={state}"
+    )
+    challenge = "x" * 43
+    state = "s" * 43
+    encoded = "https://auth.openai.com/oauth/authorize?" + query.format(
+        redirect="http%3A%2F%2Flocalhost%3A1455%2Fauth%2Fcallback", challenge=challenge, state=state
+    )
+    raw = encoded.replace("localhost%3A1455", "localhost:1455").replace("&", "&\n")
+    osc = f"\x1b]8;;{encoded}\x1b\\".encode()
+    assert parse_urls(encoded.encode()) == [encoded]
+    assert parse_urls(raw.encode()) == [raw.replace("\n", "")]
+    assert parse_urls(osc) == [encoded]
