@@ -2,8 +2,9 @@
 codex_install_url: https://chatgpt.com/codex/install.sh
 codex_install_dir: "{{ ansible_facts.user_dir }}/.local/bin"
 codex_libexec_dir: "{{ ansible_facts.user_dir }}/.local/libexec"
+codex_wrapper_dir: "{{ ansible_facts.user_dir }}/.local/share/remote-dev/bin"
 codex_real_binary: "{{ codex_libexec_dir }}/codex"
-codex_shim: "{{ codex_install_dir }}/codex"
+codex_shim: "{{ codex_wrapper_dir }}/tcodex"
 codex_home: "{{ ansible_facts.user_dir }}/.codex"
 codex_cache_dir: "{{ ansible_facts.user_dir }}/.cache/remote-dev/codex"
 codex_install_script: "{{ codex_cache_dir }}/install.sh"

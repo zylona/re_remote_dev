@@ -120,7 +120,9 @@
     marker: '# {mark} remote-dev'
     block: |
       export ZDOTDIR="${ZDOTDIR:-$HOME}"
-      export PATH="$HOME/.local/bin:$PATH"
+      # tcodex is project-owned and must stay ahead of the official codex
+      # entrypoint, which the official updater may replace at any time.
+      export PATH="$HOME/.local/share/remote-dev/bin:$HOME/.local/bin:$PATH"
       # Omarchy-compatible quick Neovim entrypoint: `n` opens the current
       # directory, while arguments are passed through to nvim unchanged.
       n() {

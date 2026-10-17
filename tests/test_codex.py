@@ -31,3 +31,15 @@ def test_codex_role_deploys_non_blocking_lifecycle_shim() -> None:
     assert '\nexec "$real"' not in shim  # shim must report exit and preserve status
     assert 'timeout=0.15' in sender
     assert 'except (OSError, ValueError)' in sender
+
+
+def test_codex_lifecycle_entrypoint_is_separate_from_official_codex() -> None:
+    defaults = (ROOT / "roles/codex/defaults/main.yml").read_text(encoding="utf-8")
+    shell = (ROOT / "roles/user_shell/tasks/main.yml").read_text(encoding="utf-8")
+    shim = (ROOT / "roles/codex/templates/codex-shim.sh.j2").read_text(encoding="utf-8")
+    assert 'codex_wrapper_dir:' in defaults
+    assert 'codex_shim: "{{ codex_wrapper_dir }}/tcodex"' in defaults
+    assert 'remote-dev/bin:$HOME/.local/bin' in shell
+    assert 'official `codex` command remains untouched' in shim
+    assert 'packages/standalone/current/bin/codex' in shim
+    assert 'normal Codex self-updates' in shim

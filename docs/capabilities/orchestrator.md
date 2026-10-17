@@ -144,6 +144,10 @@ HTTP 代理请求超时则标记为 `REMOTE_PORT_BUSY`，默认不杀远端未�
 普通交互式 `tssh` 使用相同的 reconcile：健康的远端 4227 不会被重复绑定，而是只创建本会话
 需要的 4228 事件转发；异常占用会在进入远程 Shell 前返回失败并移除本次创建的本地 unit。
 
+Codex 生命周期入口使用独立的 `tcodex` 命令。官方 `codex` 保持原始路径和更新行为，`tcodex`
+动态调用官方二进制并发送 `CODEX_START`/OAuth URL 事件；项目自有 wrapper 位于
+`~/.local/share/remote-dev/bin`，不会被官方 Codex 更新覆盖。
+
 ## P6 可选长期会话
 
 `bootstrap` 默认启用长期会话；单独使用编排器 API 时，也可显式执行：

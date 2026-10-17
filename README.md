@@ -71,7 +71,8 @@ ssh developer@203.0.113.10
 zellij --layout dev
 n
 nvim
-codex
+tcodex                 # 远程代理 + OAuth 回调 + 本地浏览器
+codex                  # 官方原始 CLI
 ```
 
 ## 配置与再次运行
@@ -187,6 +188,10 @@ SSH 或 VS Code 连接；已经运行的 tssh 终端也不会被强制关闭，�
 
 `tssh persist user@host` 只保持远端 `4227` HTTP 代理，不启动 Codex 专用的 `4228→4230`
 回调通道；需要 Codex 登录或回调时，使用普通的 `tssh user@host` 会话。
+
+远程恢复会额外安装稳定的 `tcodex` 入口。官方 `codex` 命令保持原样，继续由官方安装器和
+自更新机制管理；`tcodex` 负责 tssh 代理、OAuth 回调转发和本地浏览器启动。项目目录位于
+`~/.local/share/remote-dev/bin`，优先级高于官方 `~/.local/bin`，因此 Codex 更新不会覆盖它。
 
 持久代理只在当前开机周期有效：它不会加入 user `default.target`，重启后不会自动连接，
 需要时再次执行 `tssh persist user@host`。启动时会自动清理本机失效 unit，并只读检查远端

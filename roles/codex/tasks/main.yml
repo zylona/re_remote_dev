@@ -23,6 +23,7 @@
   loop:
     - "{{ codex_install_dir }}"
     - "{{ codex_libexec_dir }}"
+    - "{{ codex_wrapper_dir }}"
     - "{{ codex_home }}"
     - "{{ codex_cache_dir }}"
 
@@ -153,7 +154,8 @@
     regexp: '(?ms)^# >>> Codex installer >>>\n.*?^# <<< Codex installer <<<\n?'
     replace: ''
   # 官方安装器把真实二进制目录放到 PATH 首位会绕过项目 shim；项目通过
-  # ~/.local/bin/codex 统一捕获 Codex 生命周期事件，因此只保留该入口。
+  # tcodex 统一捕获 Codex 生命周期事件；官方 ~/.local/bin/codex 保持原样，
+  # 允许官方安装器和自更新机制继续管理它。
   register: codex_path_cleanup
 
 - name: 验证 Codex CLI 可执行

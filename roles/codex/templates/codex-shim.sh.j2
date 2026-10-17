@@ -1,7 +1,17 @@
 #!/bin/sh
-# remote-dev Codex lifecycle shim; never blocks Codex when the controller is absent.
+# remote-dev Codex lifecycle shim exposed as `tcodex`; never blocks Codex when
+# the controller is absent. The official `codex` command remains untouched.
 set -u
 real={{ codex_real_binary | quote }}
+# The official installer may move the active package and rewrite its own
+# ~/.local/bin/codex link. Resolve that official entrypoint at invocation time
+# so tcodex keeps following normal Codex self-updates.
+for candidate in "$HOME/.local/bin/codex" "$HOME/.codex/packages/standalone/current/bin/codex" "$real"; do
+  if [ -x "$candidate" ] && [ "$candidate" != "$0" ] && ! grep -q 'remote-dev Codex lifecycle shim' "$candidate" 2>/dev/null; then
+    real="$candidate"
+    break
+  fi
+done
 event_sender={{ codex_libexec_dir | quote }}/remote-dev-codex-event.py
 pty_runner={{ codex_libexec_dir | quote }}/remote-dev-codex-pty.py
 target={{ codex_target_digest | default('unknown') | quote }}
