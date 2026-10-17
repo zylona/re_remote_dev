@@ -82,3 +82,17 @@ def test_codex_pty_parser_accepts_encoded_raw_and_osc8_urls() -> None:
     assert parse_urls(encoded.encode()) == [encoded]
     assert parse_urls(raw.encode()) == [raw.replace("\n", "")]
     assert parse_urls(osc) == [encoded]
+
+
+def test_codex_pty_parser_accepts_new_codex_loopback_redirect() -> None:
+    parse_urls = _load_oauth_parser()
+    url = (
+        "https://auth.openai.com/oauth/authorize?response_type=code&client_id=app_test&"
+        "redirect_uri=http%3A%2F%2F127.0.0.1%3A1455%2Fauth%2Fcallback&"
+        "code_challenge=" + "x" * 43 + "&code_challenge_method=S256&state=" + "s" * 43 +
+        "&originator=codex_cli_rs"
+    )
+    assert parse_urls(url.encode()) == [url]
+    # Codex can redraw the next help text directly after the URL when PTY
+    # line breaks are normalized; that text must not leak into the browser URL.
+    assert parse_urls((url + "On a remote or headless machine").encode()) == [url]

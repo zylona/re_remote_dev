@@ -36,6 +36,15 @@ def _complete_oauth_urls(raw: bytes) -> list[str]:
     complete: list[str] = []
     for candidate in candidates:
         value = candidate.decode("ascii", "ignore").rstrip(".,;)]}")
+        # The PTY may print the next explanatory line immediately after the
+        # URL.  Newer Codex builds currently terminate the authorize request
+        # with one of these stable originator values; cut at that boundary so
+        # the following text is never sent to the browser as part of the URL.
+        for marker in ("&originator=codex_cli_rs", "&originator=codex-tui"):
+            marker_at = value.find(marker)
+            if marker_at >= 0:
+                value = value[: marker_at + len(marker)]
+                break
         try:
             parsed = urlsplit(value)
             params = parse_qs(parsed.query, keep_blank_values=True)
@@ -52,7 +61,7 @@ def _complete_oauth_urls(raw: bytes) -> list[str]:
             and all(params.get(key, [""])[0] for key in required)
             and len(params["code_challenge"][0]) >= 20
             and len(params["state"][0]) >= 16
-            and "localhost:1455" in redirect
+            and ("localhost:1455" in redirect or "127.0.0.1:1455" in redirect)
         ):
             if value not in complete:
                 complete.append(value)
