@@ -161,13 +161,16 @@ tssh cleanup
 
 ```bash
 tssh put ./report.pdf user@host
-tssh put ./build/output.tar.gz user@host -i ~/.ssh/id_ed25519
+tssh put ./a.txt ./b.txt user@host
+tssh put -r ./docs user@host
+tssh put './reports/*.pdf' user@host -i ~/.ssh/id_ed25519
 ```
 
 上传使用 SFTP 断点续传和临时文件，完成后原子替换目标文件；大文件会显示进度、速度和
 预计剩余时间。每次上传只建立一条临时 SSH ControlMaster，并复用它完成目录创建、传输和
 进度查询，结束时自动清理；因此不会因为进度刷新反复建立 SSH 连接，也不会占用 4227/4228。
-该命令只接受普通本地文件，不支持上传目录。详细契约见
+目标必须放在最后；多个文件会直接放入固定目录，`-r` 目录会保留顶层目录结构，通配符既支持
+由 shell 展开，也支持加引号交给 `tssh` 展开。详细契约见
 [`docs/capabilities/upload.md`](docs/capabilities/upload.md)。
 
 - 目标 `127.0.0.1:4227` ← 本机 `127.0.0.1:4227`：HTTP 代理；
