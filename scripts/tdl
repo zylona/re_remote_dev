@@ -9,7 +9,8 @@ usage() {
   cat <<'EOF'
 用法：tdl codex [Codex 参数...]
 
-在 tmux 的 remote-dev 会话中打开或切换到 codex 窗口。
+在 tmux 的 remote-dev 会话中打开或切换到三 pane codex 工作窗口：
+上方 Codex、中间 Neovim、下方交互式 shell。
 环境变量：
   TDL_TMUX_SESSION   会话名（默认：remote-dev）
   TDL_CODEX_COMMAND  Codex 入口（默认优先 tcodex，其次 codex）
@@ -26,6 +27,10 @@ if [[ "$1" != "codex" ]]; then
 fi
 shift
 
+if [[ -z "${TMUX:-}" ]]; then
+  echo "tdl: 请先进入 tmux 窗口后再运行 tdl codex" >&2
+  exit 1
+fi
 if ! command -v tmux >/dev/null 2>&1; then
   echo "tdl: 未找到 tmux，请先安装 tmux" >&2
   exit 1
@@ -43,17 +48,42 @@ else
 fi
 
 current_dir="$PWD"
+shell_command="${TDL_SHELL_COMMAND:-${SHELL:-/bin/sh}}"
+if command -v nvim >/dev/null 2>&1; then
+  nvim_command=(nvim .)
+else
+  nvim_command=(sh -c 'printf "tdl: 未找到 nvim；请先安装 Neovim。\\n"; exec "${SHELL:-/bin/sh}" -i')
+fi
+
+add_layout_panes() {
+  local target="$1"
+  # The first split creates the editor below Codex. Splitting that new pane
+  # again leaves a smaller, always-available command shell at the bottom.
+  # Do not assume pane-base-index is zero: users commonly set it to one.
+  tmux split-window -d -t "$target" -v -p 45 -c "$current_dir" -- "${nvim_command[@]}"
+  local editor_pane
+  editor_pane="$(tmux list-panes -t "$target" -F '#{pane_id}' | tail -n 1)"
+  tmux split-window -d -t "$editor_pane" -v -p 35 -c "$current_dir" -- "$shell_command" -i
+}
+
 if tmux has-session -t "$session" 2>/dev/null; then
   if tmux list-windows -t "$session" -F '#{window_name}' | grep -Fxq codex; then
+    target="$session:codex"
+    pane_count=$(tmux list-panes -t "$target" | wc -l | tr -d ' ')
+    if (( pane_count == 1 )); then
+      add_layout_panes "$target"
+    elif (( pane_count == 2 )); then
+      shell_pane=""
+      shell_pane="$(tmux list-panes -t "$target" -F '#{pane_id}' | tail -n 1)"
+      tmux split-window -d -t "$shell_pane" -v -p 35 -c "$current_dir" -- "$shell_command" -i
+    fi
     tmux select-window -t "$session:codex"
   else
     tmux new-window -d -t "$session" -n codex -c "$current_dir" -- "${codex_command[@]}" "$@"
+    add_layout_panes "$session:codex"
     tmux select-window -t "$session:codex"
   fi
 else
   tmux new-session -d -s "$session" -n codex -c "$current_dir" -- "${codex_command[@]}" "$@"
-fi
-
-if [[ -z "${TMUX:-}" ]]; then
-  exec tmux attach-session -t "$session"
+  add_layout_panes "$session:codex"
 fi

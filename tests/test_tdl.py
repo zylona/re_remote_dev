@@ -10,6 +10,10 @@ def test_tdl_is_a_tmux_codex_launcher():
     text = script.read_text(encoding="utf-8")
     assert "tmux new-session" in text
     assert "tmux new-window" in text
+    assert text.count("tmux split-window") >= 2
+    assert "pane_id" in text
+    assert '请先进入 tmux 窗口' in text
+    assert 'TMUX:-' in text
     assert "tcodex" in text
     assert "TDL_TMUX_SESSION" in text
     subprocess.run(["bash", "-n", str(script)], check=True)

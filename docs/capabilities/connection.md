@@ -48,8 +48,9 @@
 执行命令即可建立共享后台隧道；登录完成后按脚本给出的 `pgrep`/`kill` 步骤清理。
 `rd-help status` 可检查远端端口和会话地址状态。
 
-远程恢复同时部署 `tdl`。运行 `tdl codex` 会在当前目录创建或复用 `remote-dev` tmux 会话的
-`codex` 窗口；优先使用 `tcodex`，没有时回退官方 `codex`。已有同名窗口只切换，不重复启动。
+远程恢复同时部署 `tdl`。请先进入 tmux，再运行 `tdl codex`；它会在当前目录创建或复用 `remote-dev` tmux 会话的
+三 pane `codex` 工作窗口：上方 Codex、中间 `nvim .`、下方交互式 shell；优先使用 `tcodex`，
+没有时回退官方 `codex`。已有同名窗口只切换，并自动补齐旧窗口缺失的 pane。
 
 ## 测试
 

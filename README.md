@@ -74,7 +74,7 @@ n
 nvim
 tcodex                 # 远程代理 + OAuth 回调 + 本地浏览器
 codex                  # 官方原始 CLI
-tdl codex              # 在 tmux 中打开/切换预设 Codex 窗口
+tdl codex              # 在 tmux 中打开/切换 Codex + Neovim + shell 工作窗口
 ```
 
 ## 配置与再次运行
@@ -152,8 +152,9 @@ tssh cleanup
 解析当前 SSH 配置中的 `IdentityFile`；`-i` 可覆盖该结果。`tssh` 依赖 SSH 密钥或 ssh-agent；
 密码登录请继续使用普通 `ssh`。
 
-远程恢复会安装 `tdl`。运行 `tdl codex` 会在当前目录创建或复用 `remote-dev` tmux 会话中的
-`codex` 窗口，优先启动 `tcodex`，否则启动官方 `codex`。已有同名窗口只切换，不重复启动。
+远程恢复会安装 `tdl`。请先进入 tmux，再运行 `tdl codex`；它会在当前目录创建或复用 `remote-dev` tmux 会话中的
+三 pane `codex` 工作窗口：上方运行 `tcodex`/官方 `codex`，中间运行 `nvim .`，下方保留
+交互式 shell。已有同名窗口只切换，并会为旧的单 pane 窗口补齐布局。
 可用 `TDL_TMUX_SESSION` 修改会话名，`TDL_CODEX_COMMAND` 指定入口；它不替换官方 Codex，
 也不复制登录状态。
 
