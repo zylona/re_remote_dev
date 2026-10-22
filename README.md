@@ -153,9 +153,10 @@ tssh cleanup
 密码登录请继续使用普通 `ssh`。
 
 远程恢复会安装 `tdl`。请先进入 tmux，再运行 `tdl codex`；它会在当前目录创建或复用 `remote-dev` tmux 会话中的
-三 pane `codex` 工作窗口：上方运行 `tcodex`/官方 `codex`，中间运行 `nvim .`，下方保留
-交互式 shell。已有同名窗口只切换，并会为旧的单 pane 窗口补齐布局。
-可用 `TDL_TMUX_SESSION` 修改会话名，`TDL_CODEX_COMMAND` 指定入口；它不替换官方 Codex，
+三 pane `codex` 工作窗口：左上运行 `nvim .`，右上运行 `tcodex`/官方 `codex`，下方保留
+交互式 shell（上方约 75%，Neovim 约 60%，Codex 约 40%）。已有同名窗口只切换，并会为旧的
+单/双/三 pane 窗口补齐或重排布局。
+默认使用当前 tmux 会话；可用 `TDL_TMUX_SESSION` 显式指定其他会话，`TDL_CODEX_COMMAND` 指定入口；它不替换官方 Codex，
 也不复制登录状态。
 
 `tssh list` 会按目标主机分组显示 SSH 端口、代理状态、会话数以及实际管理的转发端口：

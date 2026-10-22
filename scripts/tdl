@@ -9,10 +9,10 @@ usage() {
   cat <<'EOF'
 用法：tdl codex [Codex 参数...]
 
-在 tmux 的 remote-dev 会话中打开或切换到三 pane codex 工作窗口：
-上方 Codex、中间 Neovim、下方交互式 shell。
+在 tmux 的当前会话中打开或切换到三 pane codex 工作窗口：
+左上 Neovim、右上 Codex、下方交互式 shell。
 环境变量：
-  TDL_TMUX_SESSION   会话名（默认：remote-dev）
+  TDL_TMUX_SESSION   可选的目标会话名（默认：当前 tmux 会话）
   TDL_CODEX_COMMAND  Codex 入口（默认优先 tcodex，其次 codex）
 EOF
 }
@@ -35,7 +35,11 @@ if ! command -v tmux >/dev/null 2>&1; then
   echo "tdl: 未找到 tmux，请先安装 tmux" >&2
   exit 1
 fi
-session="${TDL_TMUX_SESSION:-remote-dev}"
+if [[ -n "${TDL_TMUX_SESSION:-}" ]]; then
+  session="$TDL_TMUX_SESSION"
+else
+  session="$(tmux display-message -p '#{session_name}')"
+fi
 if [[ -n "${TDL_CODEX_COMMAND:-}" ]]; then
   codex_command=("${TDL_CODEX_COMMAND}")
 elif command -v tcodex >/dev/null 2>&1; then
@@ -57,13 +61,38 @@ fi
 
 add_layout_panes() {
   local target="$1"
-  # The first split creates the editor below Codex. Splitting that new pane
-  # again leaves a smaller, always-available command shell at the bottom.
+  # First create a full-width bottom shell. Then split the top Codex pane
+  # horizontally, leaving Neovim on the left and Codex on the right.
   # Do not assume pane-base-index is zero: users commonly set it to one.
-  tmux split-window -d -t "$target" -v -p 45 -c "$current_dir" -- "${nvim_command[@]}"
-  local editor_pane
-  editor_pane="$(tmux list-panes -t "$target" -F '#{pane_id}' | tail -n 1)"
-  tmux split-window -d -t "$editor_pane" -v -p 35 -c "$current_dir" -- "$shell_command" -i
+  local codex_pane
+  codex_pane="$(tmux list-panes -t "$target" -F '#{pane_id}' | head -n 1)"
+  tmux split-window -d -t "$codex_pane" -v -p 25 -c "$current_dir" -- "$shell_command" -i
+  tmux split-window -d -b -t "$codex_pane" -h -p 60 -c "$current_dir" -- "${nvim_command[@]}"
+}
+
+normalize_layout() {
+  local target="$1"
+  local codex_pane nvim_pane shell_pane codex_index nvim_index shell_index
+  local width height bottom top left right bottom_y layout
+  codex_pane="$(tmux list-panes -t "$target" -F '#{pane_id}' | sed -n '1p')"
+  nvim_pane="$(tmux list-panes -t "$target" -F '#{pane_id}' | sed -n '2p')"
+  shell_pane="$(tmux list-panes -t "$target" -F '#{pane_id}' | sed -n '3p')"
+  codex_index="$(tmux display-message -p -t "$codex_pane" '#{pane_index}')"
+  nvim_index="$(tmux display-message -p -t "$nvim_pane" '#{pane_index}')"
+  shell_index="$(tmux display-message -p -t "$shell_pane" '#{pane_index}')"
+  width="$(tmux display-message -p -t "$target" '#{window_width}')"
+  height="$(tmux display-message -p -t "$target" '#{window_height}')"
+  bottom=$((height * 25 / 100))
+  (( bottom < 4 )) && bottom=4
+  top=$((height - bottom - 1))
+  left=$(((width - 1) * 60 / 100))
+  right=$((width - left - 1))
+  bottom_y=$((top + 1))
+  printf -v layout '{"V":2,"L":{"t":"v","w":%s,"h":%s,"x":0,"y":0,"c":[{"t":"h","w":%s,"h":%s,"x":0,"y":0,"c":[{"t":"p","w":%s,"h":%s,"x":0,"y":0,"i":%s,"I":"%s"},{"t":"p","w":%s,"h":%s,"x":%s,"y":0,"i":%s,"I":"%s"}]},{"t":"p","w":%s,"h":%s,"x":0,"y":%s,"i":%s,"I":"%s"}]}}' \
+    "$width" "$height" "$width" "$top" "$left" "$top" "$nvim_index" "$nvim_pane" \
+    "$right" "$top" "$((left + 1))" "$codex_index" "$codex_pane" \
+    "$width" "$bottom" "$bottom_y" "$shell_index" "$shell_pane"
+  tmux select-layout -t "$target" "$layout"
 }
 
 if tmux has-session -t "$session" 2>/dev/null; then
@@ -75,7 +104,10 @@ if tmux has-session -t "$session" 2>/dev/null; then
     elif (( pane_count == 2 )); then
       shell_pane=""
       shell_pane="$(tmux list-panes -t "$target" -F '#{pane_id}' | tail -n 1)"
-      tmux split-window -d -t "$shell_pane" -v -p 35 -c "$current_dir" -- "$shell_command" -i
+      tmux split-window -d -t "$shell_pane" -v -p 25 -c "$current_dir" -- "$shell_command" -i
+      normalize_layout "$target"
+    elif (( pane_count == 3 )); then
+      normalize_layout "$target"
     fi
     tmux select-window -t "$session:codex"
   else

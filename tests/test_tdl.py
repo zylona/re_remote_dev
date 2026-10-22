@@ -11,7 +11,11 @@ def test_tdl_is_a_tmux_codex_launcher():
     assert "tmux new-session" in text
     assert "tmux new-window" in text
     assert text.count("tmux split-window") >= 2
+    assert "-h -p 60" in text
+    assert "-v -p 25" in text
+    assert "select-layout" in text
     assert "pane_id" in text
+    assert "#{session_name}" in text
     assert '请先进入 tmux 窗口' in text
     assert 'TMUX:-' in text
     assert "tcodex" in text
