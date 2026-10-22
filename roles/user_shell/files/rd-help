@@ -8,6 +8,7 @@ rd-help - remote-dev 会话帮助
 用法:
   rd-help              显示当前会话状态和全部常用提示
   rd-help codex        生成一次性 Codex 浏览器登录回调转发命令
+  tdl codex            在 tmux 中打开或切换预设 Codex 窗口
   rd-help proxy        生成并检查可复用的 HTTP 代理转发命令
   rd-help status       检查 SSH 会话地址和端口
 

@@ -93,6 +93,12 @@
     dest: "{{ user_shell_home }}/.local/bin/rd-help"
     owner: "{{ remote_dev.target_user }}"
     mode: '0755'
+- name: 部署 tmux Codex 快速启动入口
+  ansible.builtin.copy:
+    src: "{{ role_path }}/../../scripts/tdl"
+    dest: "{{ user_shell_home }}/.local/bin/tdl"
+    owner: "{{ remote_dev.target_user }}"
+    mode: '0755'
 - name: 部署远程文件下载与预览 helper
   ansible.builtin.copy:
     src: "{{ role_path }}/../../scripts/remote_preview_helper.py"

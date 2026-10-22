@@ -142,6 +142,13 @@ def _install_local_orchestrator(*, confirm: bool = True, restore_flow: bool = Tr
     hook_target.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     hook_target.write_text(hook_source.read_text(encoding="utf-8"), encoding="utf-8")
     hook_target.chmod(0o755)
+    tdl_source = project_root / "scripts/tdl"
+    tdl_target = Path.home() / ".local/bin/tdl"
+    if not tdl_source.is_file():
+        raise RuntimeError("未找到 scripts/tdl，无法安装 tmux Codex 快速入口。")
+    tdl_target.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    tdl_target.write_text(tdl_source.read_text(encoding="utf-8"), encoding="utf-8")
+    tdl_target.chmod(0o755)
     # Keep the source-tree installer behavior identical to the standalone
     # release installer: merge one marked, idempotent SSH integration block.
     from .ssh_integration import install as install_ssh

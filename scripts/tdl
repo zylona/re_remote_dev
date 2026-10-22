@@ -1,0 +1,59 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# tdl (tmux development launcher) keeps the small, repeatable part of the
+# remote development workflow in one command.  It deliberately launches the
+# user's official Codex entrypoint (tcodex when installed, otherwise codex)
+# instead of replacing or modifying Codex itself.
+usage() {
+  cat <<'EOF'
+用法：tdl codex [Codex 参数...]
+
+在 tmux 的 remote-dev 会话中打开或切换到 codex 窗口。
+环境变量：
+  TDL_TMUX_SESSION   会话名（默认：remote-dev）
+  TDL_CODEX_COMMAND  Codex 入口（默认优先 tcodex，其次 codex）
+EOF
+}
+
+if [[ "${1:-}" == "-h" || "${1:-}" == "--help" || $# -eq 0 ]]; then
+  usage
+  exit 0
+fi
+if [[ "$1" != "codex" ]]; then
+  echo "tdl: 不支持的预设：$1（当前仅支持 codex）" >&2
+  exit 2
+fi
+shift
+
+if ! command -v tmux >/dev/null 2>&1; then
+  echo "tdl: 未找到 tmux，请先安装 tmux" >&2
+  exit 1
+fi
+session="${TDL_TMUX_SESSION:-remote-dev}"
+if [[ -n "${TDL_CODEX_COMMAND:-}" ]]; then
+  codex_command=("${TDL_CODEX_COMMAND}")
+elif command -v tcodex >/dev/null 2>&1; then
+  codex_command=(tcodex)
+elif command -v codex >/dev/null 2>&1; then
+  codex_command=(codex)
+else
+  echo "tdl: 未找到 tcodex 或 codex" >&2
+  exit 1
+fi
+
+current_dir="$PWD"
+if tmux has-session -t "$session" 2>/dev/null; then
+  if tmux list-windows -t "$session" -F '#{window_name}' | grep -Fxq codex; then
+    tmux select-window -t "$session:codex"
+  else
+    tmux new-window -d -t "$session" -n codex -c "$current_dir" -- "${codex_command[@]}" "$@"
+    tmux select-window -t "$session:codex"
+  fi
+else
+  tmux new-session -d -s "$session" -n codex -c "$current_dir" -- "${codex_command[@]}" "$@"
+fi
+
+if [[ -z "${TMUX:-}" ]]; then
+  exec tmux attach-session -t "$session"
+fi

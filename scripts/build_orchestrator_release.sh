@@ -20,6 +20,7 @@ cp "$root_dir/src/remote_dev/ssh_integration.py" \
   "$root_dir/src/remote_dev/download.py" \
   "$stage_dir/$pkg/lib/remote_dev/"
 cp "$root_dir/scripts/remote_dev_ssh_hook.py" "$stage_dir/$pkg/bin/remote-dev-ssh-hook"
+cp "$root_dir/scripts/tdl" "$stage_dir/$pkg/bin/tdl"
 find "$stage_dir/$pkg" -type d -name '__pycache__' -prune -exec rm -rf {} +
 find "$stage_dir/$pkg" -type f -name '*.pyc' -delete
 cp "$root_dir/release/install" "$root_dir/release/uninstall" "$root_dir/release/rollback" "$stage_dir/$pkg/"
@@ -57,7 +58,7 @@ base_dir="$(cd "$(dirname "$script_path")/.." && pwd)"
 export PYTHONPATH="$base_dir/lib${PYTHONPATH:+:$PYTHONPATH}"
 exec "${PYTHON:-python3}" -m remote_dev.tssh "$@"
 EOF
-chmod 0755 "$stage_dir/$pkg/bin/tssh-server" "$stage_dir/$pkg/bin/remote-dev-ssh-hook" "$stage_dir/$pkg/bin/tssh" "$stage_dir/$pkg/install" "$stage_dir/$pkg/uninstall" "$stage_dir/$pkg/rollback"
+chmod 0755 "$stage_dir/$pkg/bin/tssh-server" "$stage_dir/$pkg/bin/remote-dev-ssh-hook" "$stage_dir/$pkg/bin/tdl" "$stage_dir/$pkg/bin/tssh" "$stage_dir/$pkg/install" "$stage_dir/$pkg/uninstall" "$stage_dir/$pkg/rollback"
 tar_args=(--sort=name --owner=0 --group=0 --numeric-owner -czf "$dist_dir/$pkg.tar.gz" -C "$stage_dir" "$pkg")
 if [[ -n "${SOURCE_DATE_EPOCH:-}" ]]; then tar_args+=(--mtime="@$SOURCE_DATE_EPOCH"); fi
 tar "${tar_args[@]}"

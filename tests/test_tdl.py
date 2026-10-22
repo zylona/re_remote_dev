@@ -1,0 +1,22 @@
+from pathlib import Path
+import subprocess
+
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def test_tdl_is_a_tmux_codex_launcher():
+    script = ROOT / "scripts" / "tdl"
+    text = script.read_text(encoding="utf-8")
+    assert "tmux new-session" in text
+    assert "tmux new-window" in text
+    assert "tcodex" in text
+    assert "TDL_TMUX_SESSION" in text
+    subprocess.run(["bash", "-n", str(script)], check=True)
+
+
+def test_remote_restore_deploys_tdl():
+    tasks = (ROOT / "roles/user_shell/tasks/main.yml").read_text(encoding="utf-8")
+    assert "部署 tmux Codex 快速启动入口" in tasks
+    assert "scripts/tdl" in tasks
+
