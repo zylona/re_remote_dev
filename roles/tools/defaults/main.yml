@@ -7,6 +7,13 @@ tools_zellij_version: "0.40.1"
 tools_fzf_version: "0.60.3"
 tools_zoxide_version: "0.9.8"
 tools_cache_dir: "{{ ansible_facts.user_dir }}/.cache/remote-dev/releases"
+tools_curl_home: "{{ tools_cache_dir }}/curl-home"
+tools_curl_bin: "{{ tools_cache_dir }}/curl-bin"
+tools_controller_cache_dir: "{{ lookup('env', 'HOME') }}/.cache/remote-dev/controller"
+tools_controller_proxy_url: "http://127.0.0.1:4227"
+tools_controller_mise_path: "{{ lookup('pipe', 'command -v mise 2>/dev/null || true') }}"
+tools_controller_zoxide_path: "{{ lookup('pipe', 'command -v zoxide 2>/dev/null || true') }}"
+tools_controller_fzf_path: "{{ lookup('pipe', 'command -v fzf 2>/dev/null || true') }}"
 tools_offline: false
 tools_checksums: {}
 tools_cache_archive: ""

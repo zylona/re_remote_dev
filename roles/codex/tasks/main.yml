@@ -115,7 +115,28 @@
     - codex_tui_table.stdout | trim == 'absent'
     - codex_status_line_existing.rc != 0
 
+- name: 检查 Codex 二进制
+  ansible.builtin.stat:
+    path: "{{ codex_real_binary }}"
+  register: codex_binary
+
+- name: 检查控制端现有 Codex 二进制
+  ansible.builtin.stat:
+    path: "{{ codex_controller_path }}"
+  register: codex_controller_binary
+  delegate_to: localhost
+  become: false
+- name: 使用控制端 Codex 二进制作为目标机下载回退
+  ansible.builtin.copy:
+    src: "{{ codex_controller_path }}"
+    dest: "{{ codex_real_binary }}"
+    owner: "{{ remote_dev.target_user }}"
+    mode: '0755'
+  when:
+    - codex_controller_binary.stat.exists | default(false)
+    - not codex_binary.stat.exists
 - name: 下载官方 Codex 安装器
+  when: not (codex_controller_binary.stat.exists | default(false))
   ansible.builtin.get_url:
     url: "{{ codex_install_url }}"
     dest: "{{ codex_install_script }}"
@@ -127,11 +148,6 @@
     https_proxy: "{{ remote_dev_temp_proxy_url | default(omit) }}"
     HTTP_PROXY: "{{ remote_dev_temp_proxy_url | default(omit) }}"
     HTTPS_PROXY: "{{ remote_dev_temp_proxy_url | default(omit) }}"
-
-- name: 检查 Codex 二进制
-  ansible.builtin.stat:
-    path: "{{ codex_real_binary }}"
-  register: codex_binary
 
 - name: 执行官方 Codex 安装器
   ansible.builtin.command:
@@ -146,7 +162,9 @@
     HTTPS_PROXY: "{{ remote_dev_temp_proxy_url | default(omit) }}"
   register: codex_install_result
   changed_when: codex_install_result.rc == 0
-  when: codex_installer_download.changed or not codex_binary.stat.exists
+  when:
+    - not (codex_controller_binary.stat.exists | default(false))
+    - codex_installer_download.changed or not codex_binary.stat.exists
 
 - name: 清理官方安装器对 libexec PATH 的注入
   ansible.builtin.replace:
@@ -174,6 +192,14 @@
     fail_msg: >-
       Codex CLI 未能正常启动（{{ codex_version.stderr | default('无错误输出') }}）。
       请检查官方安装器输出、目标架构和 {{ codex_install_dir }} 权限。
+
+- name: 创建 Codex 官方 PATH 入口
+  ansible.builtin.file:
+    src: "{{ codex_real_binary }}"
+    dest: "{{ codex_install_dir }}/codex"
+    state: link
+    force: true
+  when: codex_version.rc == 0
 
 - name: 部署 Codex 编排事件发送器
   ansible.builtin.copy:

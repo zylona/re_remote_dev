@@ -73,7 +73,7 @@ zellij --layout dev
 n
 nvim
 tcodex                 # 远程代理 + OAuth 回调 + 本地浏览器
-codex                  # 官方原始 CLI
+codex                  # 官方 CLI（恢复流程保证 ~/.local/bin/codex 可执行）
 tdl codex              # 在 tmux 中打开/切换 Codex + Neovim + shell 工作窗口
 ```
 

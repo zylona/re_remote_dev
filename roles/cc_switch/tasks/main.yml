@@ -33,19 +33,35 @@
   loop:
     - "{{ cc_switch_cli_install_dir }}"
     - "{{ cc_switch_cli_cache_dir }}"
+- name: 创建控制端 CC Switch 下载缓存目录
+  ansible.builtin.file:
+    path: "{{ cc_switch_controller_cache_dir }}"
+    state: directory
+    mode: '0700'
+  delegate_to: localhost
+  become: false
 
 - name: 下载固定版本 CC Switch CLI
   ansible.builtin.get_url:
     url: "{{ cc_switch_cli_release_base_url }}/{{ cc_switch_cli_asset_name }}"
-    dest: "{{ cc_switch_cli_archive }}"
+    dest: "{{ cc_switch_controller_cache_dir }}/{{ cc_switch_cli_asset_name }}"
     checksum: "sha256:{{ cc_switch_cli_sha256 }}"
+    mode: '0644'
+  retries: 5
+  delay: 3
+  until: cc_switch_download is succeeded
+  register: cc_switch_download
+  delegate_to: localhost
+  become: false
+  environment:
+    http_proxy: "{{ cc_switch_controller_proxy_url }}"
+    https_proxy: "{{ cc_switch_controller_proxy_url }}"
+- name: 复制 CC Switch CLI 制品到目标机
+  ansible.builtin.copy:
+    src: "{{ cc_switch_controller_cache_dir }}/{{ cc_switch_cli_asset_name }}"
+    dest: "{{ cc_switch_cli_archive }}"
     owner: "{{ remote_dev.target_user }}"
     mode: '0644'
-  environment:
-    http_proxy: "{{ remote_dev_temp_proxy_url | default(omit) }}"
-    https_proxy: "{{ remote_dev_temp_proxy_url | default(omit) }}"
-    HTTP_PROXY: "{{ remote_dev_temp_proxy_url | default(omit) }}"
-    HTTPS_PROXY: "{{ remote_dev_temp_proxy_url | default(omit) }}"
 
 - name: 解压 CC Switch CLI 制品
   ansible.builtin.unarchive:

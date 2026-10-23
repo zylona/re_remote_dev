@@ -55,16 +55,54 @@
     - not user_shell_backup_guard.stat.exists
     - user_shell_zshrc.stat.exists
   failed_when: false
-- name: 获取 Antidote
-  ansible.builtin.git:
-    repo: "{{ user_shell_antidote_repo }}"
-    version: "{{ user_shell_antidote_version }}"
-    dest: "{{ user_shell_home }}/.antidote"
-    depth: 1
-    update: true
+- name: 创建控制端 Antidote 下载缓存目录
+  ansible.builtin.file:
+    path: "{{ user_shell_controller_cache_dir }}"
+    state: directory
+    mode: '0700'
+  delegate_to: localhost
+  become: false
+  when: not (tools_offline | default(false) | bool)
+- name: 检查控制端 Antidote release 缓存
+  ansible.builtin.stat:
+    path: "{{ user_shell_controller_cache_dir }}/antidote-{{ user_shell_antidote_version }}.tar.gz"
+  register: user_shell_antidote_cache
+  delegate_to: localhost
+  become: false
+- name: 下载 Antidote release（控制端 Python HTTPS 客户端）
+  when:
+    - not (tools_offline | default(false) | bool)
+    - not user_shell_antidote_cache.stat.exists
+  ansible.builtin.get_url:
+    # codeload.github.com is served by a separate endpoint and works with
+    # proxies that reset TLS on github.com's release/archive redirects.
+    url: "https://codeload.github.com/mattmc3/antidote/tar.gz/refs/tags/{{ user_shell_antidote_version }}"
+    dest: "{{ user_shell_controller_cache_dir }}/antidote-{{ user_shell_antidote_version }}.tar.gz"
+    mode: '0600'
+    force: false
+    timeout: 180
+  retries: 5
+  delay: 3
+  until: user_shell_antidote_download is succeeded
+  register: user_shell_antidote_download
+  delegate_to: localhost
+  become: false
   environment:
-    http_proxy: "{{ remote_dev_temp_proxy_url | default(omit) }}"
-    https_proxy: "{{ remote_dev_temp_proxy_url | default(omit) }}"
+    http_proxy: "{{ user_shell_controller_proxy_url }}"
+    https_proxy: "{{ user_shell_controller_proxy_url }}"
+- name: 复制 Antidote release 到目标机
+  ansible.builtin.copy:
+    src: "{{ user_shell_controller_cache_dir }}/antidote-{{ user_shell_antidote_version }}.tar.gz"
+    dest: "{{ user_shell_home }}/.cache/antidote/{{ user_shell_antidote_version }}.tar.gz"
+    owner: "{{ remote_dev.target_user }}"
+    mode: '0600'
+- name: 解压 Antidote release
+  ansible.builtin.unarchive:
+    src: "{{ user_shell_home }}/.cache/antidote/{{ user_shell_antidote_version }}.tar.gz"
+    dest: "{{ user_shell_home }}"
+    remote_src: true
+    extra_opts: [--strip-components=1]
+    creates: "{{ user_shell_home }}/.antidote/antidote.zsh"
 - name: 部署插件清单
   ansible.builtin.copy:
     src: zsh_plugins.txt

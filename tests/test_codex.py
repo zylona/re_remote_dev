@@ -62,6 +62,14 @@ def test_codex_role_deploys_non_blocking_lifecycle_shim() -> None:
     assert 'auth.json' in shim
 
 
+def test_codex_role_exposes_installed_binary_on_user_path() -> None:
+    tasks = (ROOT / "roles/codex/tasks/main.yml").read_text(encoding="utf-8")
+    assert "创建 Codex 官方 PATH 入口" in tasks
+    assert 'dest: "{{ codex_install_dir }}/codex"' in tasks
+    assert "state: link" in tasks
+    assert 'src: "{{ codex_real_binary }}"' in tasks
+
+
 def test_codex_lifecycle_entrypoint_is_separate_from_official_codex() -> None:
     defaults = (ROOT / "roles/codex/defaults/main.yml").read_text(encoding="utf-8")
     shell = (ROOT / "roles/user_shell/tasks/main.yml").read_text(encoding="utf-8")

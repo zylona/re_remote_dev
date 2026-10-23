@@ -2,6 +2,7 @@
 nvim_package_name: neovim
 nvim_compiler_package: build-essential
 nvim_treesitter_cli_package: tree-sitter-cli
+nvim_controller_treesitter_path: "{{ lookup('pipe', 'command -v tree-sitter 2>/dev/null || true') }}"
 nvim_treesitter_cli_version: "0.26.13"
 nvim_treesitter_cli_arch_map:
   x86_64: x64
@@ -22,6 +23,11 @@ nvim_treesitter_cli_legacy_sha256:
 nvim_treesitter_cli_root: "{{ ansible_facts.user_dir }}/.local/share/remote-dev/tree-sitter"
 nvim_min_version: "0.9.0"
 nvim_release_version: "0.11.3"
+nvim_controller_cache_dir: "{{ lookup('env', 'HOME') }}/.cache/remote-dev/controller"
+nvim_controller_proxy_url: "http://127.0.0.1:4227"
+nvim_release_mirror_url: "https://gh-proxy.com/https://github.com/neovim/neovim/releases/download"
+nvim_release_sha256:
+  x86_64: "02b808a3ee8fc30161e07fe3c3edfb24b28bd0295323ac5dbdd8ec7012cac67d"
 nvim_release_arch: "x86_64"
 nvim_release_root: "{{ ansible_facts.user_dir }}/.local/share/remote-dev/nvim"
 nvim_install_dir: "{{ ansible_facts.user_dir }}/.local/bin"

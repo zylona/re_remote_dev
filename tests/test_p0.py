@@ -36,6 +36,32 @@ def test_plays_do_not_override_detected_become_method() -> None:
         assert "become_method:" not in play.read_text(), play
 
 
+def test_debian_bootstrap_repairs_empty_or_deb822_apt_sources() -> None:
+    tasks = (ROOT / "roles/bootstrap_runtime/tasks/main.yml").read_text()
+    assert "没有有效网络源" in tasks
+    assert "Types:" in tasks
+    assert "URIs:" in tasks
+    assert "apt-get -o Acquire::http::Timeout=20" in tasks
+
+
+def test_tools_downloads_use_tls_compatible_curl_home() -> None:
+    defaults = (ROOT / "roles/tools/defaults/main.yml").read_text()
+    tasks = (ROOT / "roles/tools/tasks/main.yml").read_text()
+    assert "tools_curl_bin" in defaults
+    assert "urllib.request" in tasks
+    assert "curl compatibility wrapper" in tasks
+    assert tasks.count("PATH: \"{{ tools_curl_bin }}:") >= 2
+    assert tasks.count("ansible.builtin.get_url:") >= 4
+
+
+def test_antidote_bootstrap_avoids_git_tls_path() -> None:
+    tasks = (ROOT / "roles/user_shell/tasks/main.yml").read_text()
+    assert "下载 Antidote release（控制端 Python HTTPS 客户端）" in tasks
+    assert "delegate_to: localhost" in tasks
+    assert "ansible.builtin.git:" not in tasks
+    assert "extra_opts: [--strip-components=1]" in tasks
+
+
 def test_docker_proxy_is_systemd_managed_and_idempotent() -> None:
     tasks = (ROOT / "roles/docker_proxy/tasks/main.yml").read_text()
     handlers = (ROOT / "roles/docker_proxy/handlers/main.yml").read_text()

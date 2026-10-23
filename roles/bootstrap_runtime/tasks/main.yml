@@ -20,12 +20,16 @@
       无法识别目标机包管理器。项目支持 apt、dnf/yum、apk、pacman、zypper；
       请安装其中一种包管理器，或预先提供 Python3 与基础工具后重试。
 
-- name: 修复 Debian 初始 cdrom 源（仅在没有网络源时）
+- name: 修复 Debian 初始或空 APT 源（仅在没有有效网络源时）
   ansible.builtin.raw: >-
     set -eu;
     if ! command -v apt-get >/dev/null 2>&1; then exit 0; fi;
-    if ! grep -RqsE '^[[:space:]]*deb[[:space:]]+cdrom:' /etc/apt/sources.list /etc/apt/sources.list.d 2>/dev/null
-    && [ ! -f /etc/apt/sources.list.d/remote-dev-official.list ]; then exit 0; fi;
+    source_files="/etc/apt/sources.list /etc/apt/sources.list.d";
+    has_network_source=0;
+    if grep -RqsE '^[[:space:]]*deb[[:space:]]+https?://' $source_files 2>/dev/null; then has_network_source=1; fi;
+    if grep -RqsE '^[[:space:]]*Types:[[:space:]]*.*\bdeb\b' $source_files 2>/dev/null
+    && grep -RqsE '^[[:space:]]*URIs:[[:space:]]*https?://' $source_files 2>/dev/null; then has_network_source=1; fi;
+    [ "$has_network_source" -eq 1 ] && exit 0;
     codename=$(sed -n 's/^VERSION_CODENAME=//p' /etc/os-release | tr -d '"' | head -1);
     [ -n "$codename" ] || codename=stable;
     tmp=$(mktemp);
@@ -35,7 +39,7 @@
     security_mirror={{ bootstrap_runtime_apt_security_mirror | quote }};
     printf 'deb %s %s-security main\n' "$security_mirror" "$codename" >> "$tmp";
     if ! cmp -s "$tmp" /etc/apt/sources.list.d/remote-dev-official.list 2>/dev/null
-    || grep -RqsE '^[[:space:]]*deb[[:space:]]+cdrom:' /etc/apt/sources.list /etc/apt/sources.list.d 2>/dev/null; then
+    || [ "$has_network_source" -eq 0 ]; then
       stamp=$(date +%Y%m%d%H%M%S);
       [ -f /etc/apt/sources.list ] && cp -p /etc/apt/sources.list "/etc/apt/sources.list.remote-dev.$stamp.bak" || true;
       sed -i -E '/^[[:space:]]*deb[[:space:]]+cdrom:/s/^/# remote-dev disabled: /' /etc/apt/sources.list 2>/dev/null || true;

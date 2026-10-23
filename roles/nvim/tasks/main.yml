@@ -101,6 +101,20 @@
   ansible.builtin.set_fact:
     nvim_treesitter_cli_arch: "{{ nvim_treesitter_cli_arch_map[ansible_facts.architecture] | default('') }}"
   when: nvim_ts_cli_probe.rc != 0
+- name: 检查控制端现有 Treesitter CLI
+  ansible.builtin.stat:
+    path: "{{ nvim_controller_treesitter_path }}"
+  register: nvim_controller_treesitter
+  delegate_to: localhost
+  become: false
+- name: 使用控制端 Treesitter CLI 作为下载失败回退
+  ansible.builtin.copy:
+    src: "{{ nvim_controller_treesitter_path }}"
+    dest: "{{ nvim_install_dir }}/tree-sitter"
+    mode: '0755'
+  when:
+    - nvim_controller_treesitter.stat.exists | default(false)
+    - nvim_ts_cli_probe.rc != 0
 
 - name: 拒绝不支持的官方 Treesitter CLI 架构
   ansible.builtin.assert:
@@ -110,6 +124,7 @@
   when:
     - nvim_ts_cli_probe.rc != 0
     - nvim_treesitter_cli_install.rc | default(1) | int != 0
+    - not (nvim_controller_treesitter.stat.exists | default(false))
 
 - name: 创建官方 Treesitter CLI 目录
   ansible.builtin.file:
@@ -119,6 +134,7 @@
   when:
     - nvim_ts_cli_probe.rc != 0
     - nvim_treesitter_cli_install.rc | default(1) | int != 0
+    - not (nvim_controller_treesitter.stat.exists | default(false))
 
 - name: 下载官方 Treesitter CLI release
   ansible.builtin.get_url:
@@ -137,6 +153,7 @@
     - nvim_ts_cli_probe.rc != 0
     - nvim_treesitter_cli_install.rc | default(1) | int != 0
     - not (tools_offline | default(false) | bool)
+    - not (nvim_controller_treesitter.stat.exists | default(false))
 
 - name: 解压官方 Treesitter CLI release
   ansible.builtin.unarchive:
@@ -148,6 +165,7 @@
     - nvim_ts_cli_probe.rc != 0
     - nvim_treesitter_cli_install.rc | default(1) | int != 0
     - not (tools_offline | default(false) | bool)
+    - not (nvim_controller_treesitter.stat.exists | default(false))
 
 - name: 链接官方 Treesitter CLI 到用户 PATH
   ansible.builtin.file:
@@ -159,6 +177,7 @@
     - nvim_ts_cli_probe.rc != 0
     - nvim_treesitter_cli_install.rc | default(1) | int != 0
     - not (tools_offline | default(false) | bool)
+    - not (nvim_controller_treesitter.stat.exists | default(false))
 
 - name: 验证 Treesitter CLI 安装结果
   ansible.builtin.command: tree-sitter --version
@@ -235,16 +254,46 @@
   ansible.builtin.stat:
     path: "{{ nvim_release_root }}/nvim-linux-{{ nvim_release_arch }}/bin/nvim"
   register: nvim_release_stat
-
-- name: 下载官方 Neovim 统一 Linux 安装包
+- name: 创建控制端 Neovim 下载缓存目录
+  ansible.builtin.file:
+    path: "{{ nvim_controller_cache_dir }}"
+    state: directory
+    mode: '0700'
+  delegate_to: localhost
+  become: false
+  when: not (tools_offline | default(false) | bool)
+- name: 检查控制端 Neovim 官方压缩包缓存
+  ansible.builtin.stat:
+    path: "{{ nvim_controller_cache_dir }}/nvim-{{ nvim_release_version }}-{{ nvim_release_arch }}.tar.gz"
+  register: nvim_controller_archive
+  delegate_to: localhost
+  become: false
+- name: 在控制端下载官方 Neovim 统一 Linux 安装包
   ansible.builtin.get_url:
-    url: "https://github.com/neovim/neovim/releases/download/v{{ nvim_release_version }}/nvim-linux-{{ nvim_release_arch }}.tar.gz"
-    dest: "{{ ansible_facts.user_dir }}/.cache/nvim-{{ nvim_release_version }}.tar.gz"
-    mode: '0644'
+    url: "{{ nvim_release_mirror_url }}/v{{ nvim_release_version }}/nvim-linux-{{ nvim_release_arch }}.tar.gz"
+    dest: "{{ nvim_controller_cache_dir }}/nvim-{{ nvim_release_version }}-{{ nvim_release_arch }}.tar.gz"
+    checksum: "sha256:{{ nvim_release_sha256[nvim_release_arch] }}"
+    mode: '0600'
+    force: false
+    timeout: 180
+  delegate_to: localhost
+  become: false
+  retries: 5
+  delay: 3
+  register: nvim_controller_archive_download
+  until: nvim_controller_archive_download is succeeded
+  when:
+    - not (tools_offline | default(false) | bool)
+    - not nvim_controller_archive.stat.exists
   environment:
-    http_proxy: "{{ remote_dev_temp_proxy_url | default(omit) }}"
-    https_proxy: "{{ remote_dev_temp_proxy_url | default(omit) }}"
-  when: not nvim_release_stat.stat.exists and not (tools_offline | default(false) | bool)
+    http_proxy: "{{ nvim_controller_proxy_url }}"
+    https_proxy: "{{ nvim_controller_proxy_url }}"
+- name: 复制官方 Neovim 安装包到目标机缓存
+  ansible.builtin.copy:
+    src: "{{ nvim_controller_cache_dir }}/nvim-{{ nvim_release_version }}-{{ nvim_release_arch }}.tar.gz"
+    dest: "{{ ansible_facts.user_dir }}/.cache/nvim-{{ nvim_release_version }}.tar.gz"
+    mode: '0600'
+  when: not (tools_offline | default(false) | bool)
 
 - name: 解压官方 Neovim 统一 Linux 安装包
   ansible.builtin.unarchive:
@@ -252,7 +301,9 @@
     dest: "{{ nvim_release_root }}"
     remote_src: true
     creates: "{{ nvim_release_root }}/nvim-linux-{{ nvim_release_arch }}/bin/nvim"
-  when: not nvim_release_stat.stat.exists and not (tools_offline | default(false) | bool)
+  when:
+    - not nvim_release_stat.stat.exists
+    - not (tools_offline | default(false) | bool)
 
 - name: 刷新官方 Neovim 安装状态
   ansible.builtin.stat:
@@ -374,6 +425,11 @@
     http_proxy: "{{ remote_dev_temp_proxy_url | default(omit) }}"
     https_proxy: "{{ remote_dev_temp_proxy_url | default(omit) }}"
   when: nvim_install_font and not nvim_font_stat.stat.exists and not (tools_offline | default(false) | bool)
+  retries: 5
+  delay: 3
+  until: nvim_font_download is succeeded
+  register: nvim_font_download
+  failed_when: false
 
 - name: 解压 JetBrainsMono Nerd Font
   ansible.builtin.unarchive:
@@ -381,7 +437,11 @@
     dest: "{{ nvim_font_dir }}"
     remote_src: true
     creates: "{{ nvim_font_dir }}/JetBrainsMonoNerdFont-Regular.ttf"
-  when: nvim_install_font and not nvim_font_stat.stat.exists and not (tools_offline | default(false) | bool)
+  when:
+    - nvim_install_font
+    - not nvim_font_stat.stat.exists
+    - not (tools_offline | default(false) | bool)
+    - nvim_font_download is succeeded
 
 - name: 检查 Neovim 配置语法
   ansible.builtin.command:

@@ -11,6 +11,8 @@ codex_install_script: "{{ codex_cache_dir }}/install.sh"
 # Optional checksum for supply-chain pinning. Leave empty to follow the official
 # rolling installer while still downloading it before execution (never curl|sh).
 codex_install_sha256: ""
+codex_controller_path: "{{ lookup('pipe', 'command -v codex 2>/dev/null || true') }}"
+codex_controller_proxy_url: "http://127.0.0.1:4227"
 codex_proxy_port: 4227
 codex_control_port: 4228
 codex_event_timeout_ms: 200

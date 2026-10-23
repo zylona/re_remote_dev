@@ -122,16 +122,45 @@ def _run(playbook: str, inventory: Path, *, ask_become: bool = False, ask_pass: 
         raise typer.Exit(result.returncode)
 
 
+def _local_service_matches(project_root: Path, service_dir: Path | None = None, home: Path | None = None) -> bool:
+    """Return whether the installed local service matches this source tree.
+
+    This is deliberately a content check rather than an ``is-active`` check:
+    socket activation may leave the service inactive while still being fully
+    installed, and an active unit may still be an older implementation.
+    """
+    service_dir = service_dir or (Path.home() / ".config/systemd/user")
+    home = home or Path.home()
+    executable = project_root / "re-remote"
+    if not executable.is_file():
+        return False
+    expected_service = (project_root / "systemd/tssh.service").read_text(encoding="utf-8").replace(
+        "ExecStart=tssh-server", f"ExecStart={executable} orchestrator-server"
+    )
+    expected_socket = (project_root / "systemd/tssh.socket").read_text(encoding="utf-8")
+    files = {
+        service_dir / "tssh.service": expected_service,
+        service_dir / "tssh.socket": expected_socket,
+        home / ".local/bin/remote-dev-ssh-hook": (project_root / "scripts/remote_dev_ssh_hook.py").read_text(encoding="utf-8"),
+        home / ".local/bin/tdl": (project_root / "scripts/tdl").read_text(encoding="utf-8"),
+    }
+    return all(path.is_file() and path.read_text(encoding="utf-8") == content for path, content in files.items())
+
+
 def _install_local_orchestrator(*, confirm: bool = True, restore_flow: bool = True) -> None:
     """Install or refresh the local socket-activated user service."""
     heading = "阶段 1/2：本地编排器服务安装" if restore_flow else "本地编排器服务安装"
     console.print(f"[bold cyan]{heading}[/bold cyan]")
-    if confirm and not typer.confirm("是否安装或刷新本机 tssh user 服务？", default=True):
+    project_root = Path(__file__).resolve().parents[2]
+    service_current = _local_service_matches(project_root)
+    if service_current:
+        console.print("[green]本地 tssh user 服务已是当前版本，跳过安装确认。[/green]")
+        confirm = False
+    elif confirm and not typer.confirm("是否安装或刷新本机 tssh user 服务？", default=True):
         suffix = "，远程恢复流程也未执行" if restore_flow else ""
         console.print(f"[yellow]已取消：本地服务未安装{suffix}。[/yellow]")
         raise typer.Exit(0)
 
-    project_root = Path(__file__).resolve().parents[2]
     service_dir = Path.home() / ".config/systemd/user"
     service_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
     executable = project_root / "re-remote"
@@ -178,9 +207,11 @@ def _install_local_orchestrator(*, confirm: bool = True, restore_flow: bool = Tr
     )
     subprocess.run(["systemctl", "--user", "enable", "--now", "tssh.socket"], check=True)
     service_active = subprocess.run(["systemctl", "--user", "is-active", "--quiet", "tssh.service"], check=False).returncode == 0
-    if service_changed or socket_changed or service_active:
+    if service_changed or socket_changed:
         subprocess.run(["systemctl", "--user", "restart", "tssh.service"], check=True)
         console.print("[cyan]本地编排器预检：已刷新服务进程，加载当前实现[/cyan]")
+    elif service_active:
+        console.print("[cyan]本地编排器预检：服务已是最新，保持现有进程[/cyan]")
     else:
         console.print("[cyan]本地编排器预检：服务尚未运行，将由 socket activation 启动[/cyan]")
     from .orchestrator.client import request

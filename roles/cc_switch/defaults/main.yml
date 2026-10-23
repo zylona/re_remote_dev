@@ -13,3 +13,5 @@ cc_switch_cli_asset_name: >-
 cc_switch_cli_arch: ""
 cc_switch_cli_sha256: ""
 cc_switch_cli_enabled: true
+cc_switch_controller_cache_dir: "{{ lookup('env', 'HOME') }}/.cache/remote-dev/controller"
+cc_switch_controller_proxy_url: "http://127.0.0.1:4227"
