@@ -92,8 +92,13 @@ Codex 安装由 `roles/codex` 提供一个薄包装命令：真实二进制位�
 启动和退出时尝试发送事件，不等待编排器、不改变 Codex 的标准输入输出和退出码；编排器不可用
 时事件会静默丢弃，因此不会阻塞或破坏普通 Codex 使用。
 
-恢复流程会幂等地创建 `~/.local/bin/codex` 到上述真实二进制的用户级符号链接，确保官方
-CLI 在标准用户 PATH 中可执行；项目的 `tcodex` 回调入口保持独立，不替换官方命令。
+恢复流程优先使用目标机已安装的 mise 安装完整 Codex package（包括 `codex-package.json`、
+资源和 daemon 组件），再幂等地创建 `~/.local/bin/codex` 到 package 内 `bin/codex` 的
+用户级符号链接；这样不会把单个 ELF 当成完整 CLI。项目的 `tcodex` 回调入口保持独立，
+不替换官方命令。
+
+工具恢复还会安装 `btop`（目标发行版系统包）和 `gpustat`（通过 mise 管理的 `uv tool`）。
+这两个工具属于可选能力：包源、代理或 Python 工具链不可用时只报告提示，不阻断核心环境恢复。
 
 事件通过目标机 `127.0.0.1:4228` 发送，经 SSH remote forwarding 到本机编排器的
 `127.0.0.1:4230`。本机服务同时保留 Unix socket 供 CLI 查询。每次会话的 nonce 由后续

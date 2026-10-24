@@ -16,6 +16,93 @@
       目标机缺少项目安装所需基础工具：{{ tools_prereq_check.results
       | selectattr('rc', 'ne', 0) | map(attribute='item') | list | join(', ') }}。
       请用户按发行版安装后重试。
+
+- name: 检查 btop
+  ansible.builtin.command:
+    argv: [sh, -c, "command -v {{ item }}"]
+  loop: "{{ tools_optional_system_packages }}"
+  register: tools_optional_system_probe
+  changed_when: false
+  failed_when: false
+  environment:
+    PATH: "{{ ansible_facts.user_dir }}/.local/bin:/usr/local/bin:/usr/bin:/bin"
+
+- name: 刷新 Debian 可选工具包索引
+  ansible.builtin.apt:
+    update_cache: true
+    cache_valid_time: 3600
+  become: true
+  become_user: root
+  register: tools_optional_apt_update
+  failed_when: false
+  when:
+    - ansible_facts.pkg_mgr | default('') == 'apt'
+    - tools_optional_system_probe.results | selectattr('rc', 'ne', 0) | list | length > 0
+    - not (tools_offline | bool)
+  environment:
+    http_proxy: "{{ remote_dev_temp_proxy_url | default(omit) }}"
+    https_proxy: "{{ remote_dev_temp_proxy_url | default(omit) }}"
+    HTTP_PROXY: "{{ remote_dev_temp_proxy_url | default(omit) }}"
+    HTTPS_PROXY: "{{ remote_dev_temp_proxy_url | default(omit) }}"
+
+- name: 重试安装可选系统工具
+  ansible.builtin.package:
+    name: "{{ item.item }}"
+    state: present
+  loop: "{{ tools_optional_system_probe.results }}"
+  loop_control:
+    label: "{{ item.item }}"
+  become: true
+  become_user: root
+  register: tools_optional_system_install
+  failed_when: false
+  when:
+    - item.rc | int != 0
+    - not (tools_offline | bool)
+
+- name: 报告可选系统工具安装结果
+  ansible.builtin.debug:
+    msg: >-
+      {{ item.item.item }} 未能安装；不影响基础恢复。请按目标发行版手动安装该工具。
+  loop: "{{ tools_optional_system_install.results | default([]) }}"
+  loop_control:
+    label: "{{ item.item.item }}"
+  when:
+    - item.rc | default(0) | int != 0
+    - item.item.rc | default(0) | int != 0
+
+- name: 验证可选系统工具
+  ansible.builtin.command:
+    argv: [sh, -c, "command -v {{ item }}"]
+  loop: "{{ tools_optional_system_packages }}"
+  loop_control:
+    label: "{{ item }}"
+  register: tools_optional_system_verify
+  changed_when: false
+  failed_when: false
+  environment:
+    PATH: "{{ ansible_facts.user_dir }}/.local/bin:/usr/local/bin:/usr/bin:/bin"
+
+- name: 报告仍缺失的可选系统工具
+  ansible.builtin.debug:
+    msg: >-
+      {{ item.item }} 未安装成功；不影响基础恢复，请按目标发行版手动安装后重试。
+  loop: "{{ tools_optional_system_verify.results }}"
+  loop_control:
+    label: "{{ item.item }}"
+  when: item.rc | int != 0
+
+- name: 探测 NVIDIA GPU
+  ansible.builtin.command:
+    argv: [nvidia-smi, "--query-gpu=name", "--format=csv,noheader"]
+  register: tools_nvidia_probe
+  changed_when: false
+  failed_when: false
+
+- name: 设置 GPU 工具可用状态
+  ansible.builtin.set_fact:
+    tools_gpu_available: "{{ tools_nvidia_probe.rc | int == 0 and tools_nvidia_probe.stdout | trim | length > 0 }}"
+
 - name: 创建用户工具目录
   ansible.builtin.file:
     path: "{{ tools_install_dir }}"
@@ -149,12 +236,73 @@
     - not (tools_controller_mise.stat.exists | default(false))
   ansible.builtin.command:
     argv: [sh, "{{ tools_cache_dir }}/mise-install.sh"]
+  changed_when: true
   environment:
     HOME: "{{ ansible_facts.user_dir }}"
     MISE_INSTALL_PATH: "{{ tools_install_dir }}/mise"
     PATH: "{{ tools_curl_bin }}:{{ ansible_facts.user_dir }}/.local/bin:/usr/local/bin:/usr/bin:/bin"
     http_proxy: "{{ remote_dev_temp_proxy_url | default(omit) }}"
     https_proxy: "{{ remote_dev_temp_proxy_url | default(omit) }}"
+- name: 使用 mise 安装 GPU 工具所需的 uv
+  ansible.builtin.command:
+    argv: [timeout, "180", "{{ tools_install_dir }}/mise", install, "uv@{{ tools_gpu_uv_version }}"]
+  register: tools_gpu_uv_install
+  changed_when: tools_gpu_uv_install.rc == 0 and 'already installed' not in (tools_gpu_uv_install.stdout | default(''))
+  failed_when: false
+  when:
+    - not (tools_offline | bool)
+    - tools_gpu_python_tool | length > 0
+    - tools_gpu_available | bool
+  environment:
+    HOME: "{{ ansible_facts.user_dir }}"
+    PATH: "{{ tools_install_dir }}:/usr/local/bin:/usr/bin:/bin"
+    http_proxy: "{{ remote_dev_temp_proxy_url | default(omit) }}"
+    https_proxy: "{{ remote_dev_temp_proxy_url | default(omit) }}"
+    HTTP_PROXY: "{{ remote_dev_temp_proxy_url | default(omit) }}"
+    HTTPS_PROXY: "{{ remote_dev_temp_proxy_url | default(omit) }}"
+- name: 安装 gpustat 到用户工具目录
+  ansible.builtin.command:
+    argv:
+      - timeout
+      - "180"
+      - "{{ tools_install_dir }}/mise"
+      - exec
+      - "uv@{{ tools_gpu_uv_version }}"
+      - --
+      - uv
+      - tool
+      - install
+      - --force
+      - "{{ tools_gpu_python_tool }}"
+  register: tools_gpustat_install
+  changed_when: tools_gpustat_install.rc == 0
+  failed_when: false
+  when:
+    - tools_gpu_uv_install.rc | default(1) | int == 0
+    - not (tools_offline | bool)
+    - tools_gpu_available | bool
+  environment:
+    HOME: "{{ ansible_facts.user_dir }}"
+    UV_TOOL_BIN_DIR: "{{ tools_install_dir }}"
+    PATH: "{{ tools_install_dir }}:/usr/local/bin:/usr/bin:/bin"
+    http_proxy: "{{ remote_dev_temp_proxy_url | default(omit) }}"
+    https_proxy: "{{ remote_dev_temp_proxy_url | default(omit) }}"
+    HTTP_PROXY: "{{ remote_dev_temp_proxy_url | default(omit) }}"
+    HTTPS_PROXY: "{{ remote_dev_temp_proxy_url | default(omit) }}"
+- name: 报告 gpustat 安装结果
+  ansible.builtin.debug:
+    msg: "gpustat 未能安装；目标机没有可用 GPU 工具链或当前代理不可用，已跳过。"
+  when:
+    - tools_gpu_python_tool | length > 0
+    - not (tools_gpu_available | bool)
+
+- name: 报告 gpustat 安装失败
+  ansible.builtin.debug:
+    msg: "gpustat 未能安装；GPU 工具链或当前代理不可用，已跳过。"
+  when:
+    - tools_gpu_python_tool | length > 0
+    - tools_gpu_available | bool
+    - tools_gpustat_install.rc | default(0) | int != 0
 - name: 检查控制端现有 zoxide 二进制
   ansible.builtin.stat:
     path: "{{ tools_controller_zoxide_path }}"
@@ -203,6 +351,7 @@
     - not (tools_controller_zoxide.stat.exists | default(false))
   ansible.builtin.command:
     argv: [sh, "{{ tools_cache_dir }}/zoxide-install.sh"]
+  changed_when: true
   environment:
     HOME: "{{ ansible_facts.user_dir }}"
     PATH: "{{ tools_curl_bin }}:{{ ansible_facts.user_dir }}/.local/bin:/usr/local/bin:/usr/bin:/bin"

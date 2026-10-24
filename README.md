@@ -5,7 +5,7 @@
 [![License](https://img.shields.io/github/license/zylona/re_remote_dev)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Linux-333?logo=linux)](#支持范围)
 
-用一次受控运行，把一台可 SSH 登录的 Linux 主机恢复成现代远程开发环境：zsh、Antidote、Powerlevel10k、mise、fzf、zoxide、Zellij、Neovim、Codex CLI 和 CC Switch CLI。项目采用 Ansible-first 设计，支持无外网目标机的临时 HTTP 代理，并保持普通 `ssh user@host` 的原生连接体验。
+用一次受控运行，把一台可 SSH 登录的 Linux 主机恢复成现代远程开发环境：zsh、Antidote、Powerlevel10k、mise、fzf、zoxide、Zellij、btop、gpustat、Neovim、Codex CLI 和 CC Switch CLI。项目采用 Ansible-first 设计，支持无外网目标机的临时 HTTP 代理，并保持普通 `ssh user@host` 的原生连接体验。
 
 > 当前发布版本：`v0.1.27`。已在 Debian 13、Arch/Omarchy 和 openEuler 24.03 上完成真实回归，包含多窗口、多用户共享隧道、断线恢复和 30 分钟连续观察。默认不安装远端常驻 Agent、不开放公网端口、不保存密码或 API Token。
 
@@ -73,9 +73,13 @@ zellij --layout dev
 n
 nvim
 tcodex                 # 远程代理 + OAuth 回调 + 本地浏览器
-codex                  # 官方 CLI（恢复流程保证 ~/.local/bin/codex 可执行）
+codex                  # 官方 CLI（mise 管理完整 package，恢复流程保证入口可执行）
 tdl codex              # 在 tmux 中打开/切换 Codex + Neovim + shell 工作窗口
 ```
+
+可选监控工具：`btop` 直接运行即可；检测到 NVIDIA 驱动时还会安装 `gpustat`，可用
+`gpustat -cp` 查看 GPU、进程和显存占用。没有 NVIDIA GPU 或目标包源不可用时，`gpustat`
+会跳过且不影响其余恢复。
 
 ## 配置与再次运行
 

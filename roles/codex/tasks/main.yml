@@ -34,7 +34,7 @@
 
 - name: 检查旧版 Codex 路径
   ansible.builtin.stat:
-    path: "{{ codex_shim }}"
+    path: "{{ codex_install_dir }}/codex"
   register: codex_legacy_before
 
 - name: 移动旧版 Codex 二进制到受管真实路径
@@ -120,23 +120,71 @@
     path: "{{ codex_real_binary }}"
   register: codex_binary
 
-- name: 检查控制端现有 Codex 二进制
-  ansible.builtin.stat:
-    path: "{{ codex_controller_path }}"
-  register: codex_controller_binary
-  delegate_to: localhost
-  become: false
-- name: 使用控制端 Codex 二进制作为目标机下载回退
-  ansible.builtin.copy:
-    src: "{{ codex_controller_path }}"
-    dest: "{{ codex_real_binary }}"
-    owner: "{{ remote_dev.target_user }}"
-    mode: '0755'
+- name: 检查目标机 mise 是否可用
+  ansible.builtin.command:
+    argv: ["{{ codex_mise_path }}", --version]
+  register: codex_mise_probe
+  changed_when: false
+  failed_when: false
+  environment:
+    HOME: "{{ ansible_facts.user_dir }}"
+    PATH: "{{ ansible_facts.user_dir }}/.local/bin:/usr/local/bin:/usr/bin:/bin"
+
+- name: 使用 mise 安装完整 Codex package
+  ansible.builtin.command:
+    argv: ["{{ codex_mise_path }}", install, "codex@{{ codex_mise_version }}"]
+  register: codex_mise_install
+  changed_when: codex_mise_install.rc == 0 and 'already installed' not in (codex_mise_install.stdout | default(''))
+  failed_when: false
+  when: codex_mise_probe.rc == 0
+  environment:
+    HOME: "{{ ansible_facts.user_dir }}"
+    PATH: "{{ ansible_facts.user_dir }}/.local/bin:/usr/local/bin:/usr/bin:/bin"
+    http_proxy: "{{ remote_dev_temp_proxy_url | default(omit) }}"
+    https_proxy: "{{ remote_dev_temp_proxy_url | default(omit) }}"
+    HTTP_PROXY: "{{ remote_dev_temp_proxy_url | default(omit) }}"
+    HTTPS_PROXY: "{{ remote_dev_temp_proxy_url | default(omit) }}"
+
+- name: 获取 mise 管理的完整 Codex package 路径
+  ansible.builtin.command:
+    argv: ["{{ codex_mise_path }}", where, "codex@{{ codex_mise_version }}"]
+  register: codex_mise_where
+  changed_when: false
+  failed_when: false
   when:
-    - codex_controller_binary.stat.exists | default(false)
-    - not codex_binary.stat.exists
+    - codex_mise_probe.rc == 0
+    - codex_mise_install.rc | default(1) | int == 0
+  environment:
+    HOME: "{{ ansible_facts.user_dir }}"
+    PATH: "{{ ansible_facts.user_dir }}/.local/bin:/usr/local/bin:/usr/bin:/bin"
+
+- name: 检查 mise Codex package 清单
+  ansible.builtin.stat:
+    path: "{{ codex_mise_where.stdout | trim }}/codex-package.json"
+  register: codex_mise_package
+  when: codex_mise_where.stdout | default('') | trim | length > 0
+
+- name: 使用 mise 的完整 Codex package
+  ansible.builtin.set_fact:
+    codex_real_binary: "{{ codex_mise_where.stdout | trim }}/bin/codex"
+  when: codex_mise_package.stat.exists | default(false)
+
+- name: 清理不完整的旧 Codex 单文件安装
+  ansible.builtin.file:
+    path: "{{ codex_libexec_dir }}/codex"
+    state: absent
+  when:
+    - codex_mise_package.stat.exists | default(false)
+    - codex_real_binary != codex_libexec_dir + '/codex'
+
+- name: 刷新 Codex 二进制状态
+  ansible.builtin.stat:
+    path: "{{ codex_real_binary }}"
+  register: codex_binary
+
 - name: 下载官方 Codex 安装器
-  when: not (codex_controller_binary.stat.exists | default(false))
+  when:
+    - not (codex_mise_package.stat.exists | default(false))
   ansible.builtin.get_url:
     url: "{{ codex_install_url }}"
     dest: "{{ codex_install_script }}"
@@ -163,7 +211,7 @@
   register: codex_install_result
   changed_when: codex_install_result.rc == 0
   when:
-    - not (codex_controller_binary.stat.exists | default(false))
+    - not (codex_mise_package.stat.exists | default(false))
     - codex_installer_download.changed or not codex_binary.stat.exists
 
 - name: 清理官方安装器对 libexec PATH 的注入
