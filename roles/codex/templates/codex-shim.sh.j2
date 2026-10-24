@@ -21,6 +21,12 @@ target={{ codex_target_digest | default('unknown') | quote }}
 nonce_file={{ codex_nonce_file | default(ansible_facts.user_dir ~ '/.config/remote-dev/session.nonce') | quote }}
 auth_file={{ codex_home | quote }}/auth.json
 nonce=$(cat "$nonce_file" 2>/dev/null || true)
+# `tssh` sessions carry a short-lived nonce in the process environment rather
+# than the shared nonce file. Prefer that session value so ordinary tssh
+# connections can emit OAuth events without requiring a persistent session.
+if [ -z "$nonce" ] && [ -n "${RDO_NONCE:-}" ]; then
+  nonce="$RDO_NONCE"
+fi
 # Do not use file existence as the authentication signal: `codex logout` may
 # leave auth.json behind with expired or cleared credentials. The official
 # status command is authoritative and its output is intentionally suppressed.

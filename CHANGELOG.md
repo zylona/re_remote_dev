@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- 修复 `tcodex` 在 `tssh` 交互式会话中无法读取短生命周期 `RDO_NONCE`，导致 OAuth 事件未发送、本地浏览器无法自动打开的问题。
+
+## [0.1.29]
+
+- `tcodex` 现在会在共享 nonce 文件不可用时回退读取当前 `tssh` 会话的 `RDO_NONCE`，恢复远端 Codex 登录的本地浏览器拉起与回调链路。
+
 - P2：代理转发改为独立 SSH forwarder，不再与普通终端共享 ControlMaster。
 - P3：Codex 事件回传改为独立 SSH forwarder；编排器不再通过 ControlMaster 探测或补建事件转发，降低终端输入延迟和复用连接故障影响。
 - P4：OAuth localhost:1455 回调改为独立短生命周期 SSH `-N -L` forwarder，避免登录期间操作 ControlMaster；完成或退出时自动清理 IPv4/IPv6 转发。

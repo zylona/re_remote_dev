@@ -8,6 +8,7 @@ ROOT = Path(__file__).parents[1]
 def test_codex_role_uses_official_staged_installer() -> None:
     defaults = (ROOT / "roles/codex/defaults/main.yml").read_text(encoding="utf-8")
     tasks = (ROOT / "roles/codex/tasks/main.yml").read_text(encoding="utf-8")
+    shim = (ROOT / "roles/codex/templates/codex-shim.sh.j2").read_text(encoding="utf-8")
     assert "https://chatgpt.com/codex/install.sh" in defaults
     assert "ansible.builtin.get_url" in tasks
     assert "curl | sh" not in tasks
@@ -16,6 +17,7 @@ def test_codex_role_uses_official_staged_installer() -> None:
     assert "使用 mise 安装完整 Codex package" in tasks
     assert "codex-package.json" in tasks
     assert "codex_controller_path" not in defaults
+    assert 'nonce="$RDO_NONCE"' in shim
 
 
 def test_cc_switch_cli_is_pinned_and_user_scoped() -> None:
