@@ -187,6 +187,13 @@
           command nvim "$@"
         fi
       }
+      # Match the local Omarchy directory listing when eza is available.
+      # Keep the aliases optional so minimal/non-Debian systems retain plain ls.
+      if command -v eza >/dev/null 2>&1; then
+        alias ls='eza -lh --group-directories-first --icons=auto'
+        alias lsa='ls -a'
+        alias lt='eza --tree --level=2 --long --icons --git'
+      fi
       if [[ -o interactive ]]; then
         autoload -Uz compinit && compinit -C -d "$HOME/.cache/zsh/zcompdump"
       fi

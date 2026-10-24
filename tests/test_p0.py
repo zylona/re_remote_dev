@@ -59,10 +59,19 @@ def test_tools_include_optional_btop_and_gpustat() -> None:
     tasks = (ROOT / "roles/tools/tasks/main.yml").read_text(encoding="utf-8")
     assert "tools_optional_system_packages:" in defaults
     assert "- btop" in defaults
+    assert "- eza" in defaults
     assert "tools_gpu_python_tool: gpustat" in defaults
     assert "安装可选系统工具" in tasks
     assert "使用 mise 安装 GPU 工具所需的 uv" in tasks
     assert "安装 gpustat 到用户工具目录" in tasks
+
+
+def test_user_shell_provides_optional_eza_aliases() -> None:
+    tasks = (ROOT / "roles/user_shell/tasks/main.yml").read_text(encoding="utf-8")
+    assert "command -v eza" in tasks
+    assert "alias ls='eza -lh --group-directories-first --icons=auto'" in tasks
+    assert "alias lsa='ls -a'" in tasks
+    assert "alias lt='eza --tree --level=2 --long --icons --git'" in tasks
 
 
 def test_antidote_bootstrap_avoids_git_tls_path() -> None:
