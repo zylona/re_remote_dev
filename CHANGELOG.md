@@ -4,6 +4,10 @@
 
 - 修复 `tcodex` 在 `tssh` 交互式会话中无法读取短生命周期 `RDO_NONCE`，导致 OAuth 事件未发送、本地浏览器无法自动打开的问题。
 
+## [0.1.30]
+
+- `tcodex` 优先使用当前 `tssh` 会话的 `RDO_NONCE`，避免异常中断遗留的旧 `session.nonce` 导致 OAuth 事件被拒绝、浏览器无法拉起。
+
 ## [0.1.29]
 
 - `tcodex` 现在会在共享 nonce 文件不可用时回退读取当前 `tssh` 会话的 `RDO_NONCE`，恢复远端 Codex 登录的本地浏览器拉起与回调链路。

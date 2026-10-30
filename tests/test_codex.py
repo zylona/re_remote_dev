@@ -17,7 +17,7 @@ def test_codex_role_uses_official_staged_installer() -> None:
     assert "使用 mise 安装完整 Codex package" in tasks
     assert "codex-package.json" in tasks
     assert "codex_controller_path" not in defaults
-    assert 'nonce="$RDO_NONCE"' in shim
+    assert 'nonce="${RDO_NONCE:-}"' in shim
 
 
 def test_cc_switch_cli_is_pinned_and_user_scoped() -> None:

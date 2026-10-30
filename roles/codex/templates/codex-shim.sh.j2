@@ -20,12 +20,14 @@ pty_runner={{ codex_libexec_dir | quote }}/remote-dev-codex-pty.py
 target={{ codex_target_digest | default('unknown') | quote }}
 nonce_file={{ codex_nonce_file | default(ansible_facts.user_dir ~ '/.config/remote-dev/session.nonce') | quote }}
 auth_file={{ codex_home | quote }}/auth.json
-nonce=$(cat "$nonce_file" 2>/dev/null || true)
-# `tssh` sessions carry a short-lived nonce in the process environment rather
-# than the shared nonce file. Prefer that session value so ordinary tssh
-# connections can emit OAuth events without requiring a persistent session.
-if [ -z "$nonce" ] && [ -n "${RDO_NONCE:-}" ]; then
-  nonce="$RDO_NONCE"
+# `tssh` sessions carry the current short-lived nonce in the process
+# environment. Prefer it over the shared file: an interrupted SSH session can
+# leave a stale file behind, and sending that nonce makes the orchestrator
+# reject the OAuth event. The file remains a compatibility fallback for older
+# managed sessions that do not export RDO_NONCE.
+nonce="${RDO_NONCE:-}"
+if [ -z "$nonce" ]; then
+  nonce=$(cat "$nonce_file" 2>/dev/null || true)
 fi
 # Do not use file existence as the authentication signal: `codex logout` may
 # leave auth.json behind with expired or cleared credentials. The official
