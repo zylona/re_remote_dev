@@ -386,6 +386,7 @@
     - lua/config/lazy.lua
     - lua/config/options.lua
     - lua/config/remote_clipboard.lua
+    - lua/plugins/markdown-tools.lua
     - lua/plugins/all-themes.lua
     - lua/plugins/disable-news-alert.lua
     - lua/plugins/omarchy-theme-hotreload.lua
@@ -393,6 +394,15 @@
     - lua/plugins/snacks-animated-scrolling-off.lua
     - lua/plugins/theme.lua
     - plugin/after/transparency.lua
+  when: nvim_profile == 'omarchy-compatible'
+
+- name: 清理旧版 Markdownlint 全局规则覆盖
+  ansible.builtin.file:
+    path: "{{ nvim_config_dir }}/{{ item }}"
+    state: absent
+  loop:
+    - lua/plugins/markdownlint.lua
+    - markdownlint-cli2.yaml
   when: nvim_profile == 'omarchy-compatible'
 
 - name: 标记受管 Neovim 配置
@@ -475,6 +485,35 @@
   when:
     - nvim_sync_plugins
     - not (tools_offline | default(false) | bool)
+
+- name: 检查 Markdown 预览插件
+  ansible.builtin.stat:
+    path: "{{ nvim_data_dir }}/lazy/markdown-preview.nvim/app/bin/markdown-preview-linux"
+  register: nvim_markdown_preview_binary
+  when:
+    - nvim_sync_plugins
+    - not (tools_offline | default(false) | bool)
+
+- name: 验证 Markdown 预览插件安装完成
+  ansible.builtin.assert:
+    that:
+      - nvim_markdown_preview_binary.stat.exists
+      - nvim_markdown_preview_binary.stat.executable
+    fail_msg: >-
+      LazyVim lang.markdown extra 未完成安装，markdown-preview.nvim 的 Linux 预览程序缺失。
+      请通过 tssh 或重新执行 setup，确保本轮临时 HTTP(S) 代理可用后重试。
+  when:
+    - nvim_sync_plugins
+    - not (tools_offline | default(false) | bool)
+
+- name: 移除不再默认使用的 markdownlint-cli2
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - "{{ nvim_data_dir }}/mason/bin/markdownlint-cli2"
+    - "{{ nvim_data_dir }}/mason/packages/markdownlint-cli2"
+  when: nvim_profile == 'omarchy-compatible'
 
 - name: 预安装 LazyVim 默认 Treesitter parsers
   ansible.builtin.command:

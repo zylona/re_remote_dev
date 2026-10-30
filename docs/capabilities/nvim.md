@@ -9,8 +9,8 @@
 `playbooks/plays/50_nvim.yml` 由 `playbooks/site.yml` 在 tools 后执行。Role 会：
 
 1. 按目标发行版包管理器安装缺失的 `neovim`；
-2. 备份并部署受控 LazyVim 配置快照和 `lazy-lock.json`；
-3. 通过临时 HTTP(S) 代理执行 LazyVim 插件同步；
+2. 备份并部署受控 LazyVim 配置快照和 `lazy-lock.json`，默认启用 `lang.markdown` extra；
+3. 通过临时 HTTP(S) 代理执行 LazyVim 插件同步，包括 markdown 插件及预览程序；
 4. 在用户目录安装 JetBrainsMono Nerd Font（可关闭）；
 5. 保留远程剪贴板与 Omarchy 主题兼容逻辑。
 
@@ -20,6 +20,16 @@
 重新执行恢复即可。
 使用远程 Nvim 时应通过 `tssh user@host` 进入，使 Nvim 继承本轮 4227 代理；普通 `ssh` 或
 未配置代理的 VS Code Remote-SSH 不会自动获得该运行时代理。
+
+`lang.markdown` 在远端提供 Markdown LSP、Treesitter 渲染和预览支持。恢复配置保留
+Markdown preview/render 与 Markdown TOC 工具，但不通过 Mason 安装 `markdownlint-cli2`，
+也不会让 nvim-lint 对 Markdown/MDX 调用该 linter；不覆盖 MD013、MD060 等 lint 规则。
+`:MarkdownPreview`
+会在远端启动预览服务并尝试调用远端浏览器；纯 SSH 环境没有远端桌面时，应使用项目的
+`rdo file.md`（或 Neo-tree 的 `O`）把文件下载并交给本机预览器。插件只在恢复阶段通过代理
+安装，普通 Nvim 启动不会尝试后台 clone；如果手动启用了其他 LazyVim extra，应重新执行
+恢复以同步受管配置和锁文件。此配置与本机当前状态保持一致：未安装或调用 Markdown lint CLI，
+因此不会产生 markdownlint 诊断或 `ENOENT` 提示。
 
 ## Verify
 
