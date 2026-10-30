@@ -3,6 +3,11 @@
 # the controller is absent. The official `codex` command remains untouched.
 set -u
 real={{ codex_real_binary | quote }}
+codex_home={{ codex_home | quote }}
+# Keep the browser-login flow and the normal `codex` command on the same
+# authentication store.  CC Switch may export a temporary CODEX_HOME for its
+# own client; tcodex must not accidentally write credentials there.
+export CODEX_HOME="$codex_home"
 # The official installer may move the active package and rewrite its own
 # ~/.local/bin/codex link. Resolve that official entrypoint at invocation time
 # so tcodex keeps following normal Codex self-updates.
@@ -47,6 +52,15 @@ fi
 if [ -n "$nonce" ] && [ -x "$event_sender" ]; then
   python3 "$event_sender" CODEX_START "$target" "$nonce" "$$" >/dev/null 2>&1 || true
 fi
+# Authentication must run in the foreground process.  A managed app-server
+# can outlive an SSH/tssh lease and retain a dead 4227 proxy environment;
+# using --no-daemon for the login flow avoids routing the token exchange
+# through a stale daemon while preserving the native Codex command afterwards.
+run_args="$*"
+case " $run_args " in
+  *" --no-daemon "*) : ;;
+  *) set -- "$@" --no-daemon ;;
+esac
 if [ -x "$pty_runner" ] && [ -t 1 ]; then
   python3 "$pty_runner" "$event_sender" "$target" "$nonce" "$real" "$@"
 else
@@ -55,5 +69,21 @@ fi
 status=$?
 if [ -n "$nonce" ] && [ -x "$event_sender" ]; then
   python3 "$event_sender" CODEX_EXIT "$target" "$nonce" "$$:$status" >/dev/null 2>&1 || true
+fi
+# A browser page completing is not sufficient evidence that OAuth completed:
+# the token exchange may still have failed.  Verify the official auth state
+# before returning success from a login attempt, while leaving normal Codex
+# exits untouched.
+if [ "$status" -eq 0 ] && [ "$logged_in" -eq 0 ]; then
+  if ! "$real" login status >/dev/null 2>&1; then
+    printf '%s\n' 'tcodex: OAuth 回调未完成，认证凭据未生效；请保持当前 tssh 会话和 4227 代理后重试。' >&2
+    exit 74
+  fi
+  # A previous daemon may have started before authentication (or under a
+  # stale tssh lease). Restart only the official daemon controlled by this
+  # CODEX_HOME so the next plain `codex` session observes the new auth state.
+  if ! timeout 15 "$real" app-server daemon restart >/dev/null 2>&1; then
+    printf '%s\n' 'tcodex: 登录已写入认证文件，但官方 Codex daemon 重启失败；可稍后执行 codex app-server daemon restart。' >&2
+  fi
 fi
 exit "$status"

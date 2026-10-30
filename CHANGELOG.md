@@ -4,6 +4,12 @@
 
 - 修复 `tcodex` 在 `tssh` 交互式会话中无法读取短生命周期 `RDO_NONCE`，导致 OAuth 事件未发送、本地浏览器无法自动打开的问题。
 
+## [0.1.31]
+
+- `tcodex` 登录固定使用当前前台 Codex 进程和统一的 `~/.codex` 认证目录。
+- OAuth 回调完成后校验 `codex login status`，避免浏览器完成但认证未落盘时误报成功。
+- 登录成功后仅重启当前官方 Codex daemon，避免后续普通 `codex` 会话连接旧认证状态；不接管 CC Switch 或 VS Code daemon。
+
 ## [0.1.30]
 
 - `tcodex` 优先使用当前 `tssh` 会话的 `RDO_NONCE`，避免异常中断遗留的旧 `session.nonce` 导致 OAuth 事件被拒绝、浏览器无法拉起。

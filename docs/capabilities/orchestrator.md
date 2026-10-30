@@ -157,6 +157,13 @@ Codex 生命周期入口使用独立的 `tcodex` 命令。官方 `codex` 保持�
 动态调用官方二进制并发送 `CODEX_START`/OAuth URL 事件；项目自有 wrapper 位于
 `~/.local/share/remote-dev/bin`，不会被官方 Codex 更新覆盖。
 
+`tcodex` 的首次认证固定使用当前前台进程和 `--no-daemon`，避免复用已继承旧代理环境的
+app-server。它强制使用目标用户的默认 `CODEX_HOME`，并在 OAuth 子进程退出后再次执行
+`codex login status`；浏览器页面完成但 token exchange 未落盘时返回失败，不会误报为已登录。
+认证成功后只重启该 `CODEX_HOME` 对应的官方 daemon，确保后续普通 `codex` 会话读取刚写入的
+认证状态；重启失败会给出可执行提示，但不会撤销已保存的认证。
+VS Code、CC Switch 或其他用户会话的 daemon 不会被 tcodex 关闭或接管。
+
 ## P6 可选长期会话
 
 `bootstrap` 默认启用长期会话；单独使用编排器 API 时，也可显式执行：

@@ -18,6 +18,7 @@ def test_codex_role_uses_official_staged_installer() -> None:
     assert "codex-package.json" in tasks
     assert "codex_controller_path" not in defaults
     assert 'nonce="${RDO_NONCE:-}"' in shim
+    assert 'export CODEX_HOME="$codex_home"' in shim
 
 
 def test_cc_switch_cli_is_pinned_and_user_scoped() -> None:
@@ -66,6 +67,10 @@ def test_codex_role_deploys_non_blocking_lifecycle_shim() -> None:
     assert 'OAuth/callback entrypoint' in shim
     assert '"$real" login status' in shim
     assert 'auth.json' in shim
+    assert '"$@" --no-daemon' in shim
+    assert 'OAuth 回调未完成' in shim
+    assert '"$real" login status' in shim
+    assert 'app-server daemon restart' in shim
 
 
 def test_codex_role_exposes_installed_binary_on_user_path() -> None:
