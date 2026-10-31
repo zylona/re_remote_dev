@@ -1,0 +1,27 @@
+---
+- name: 只读检查必需 Codex Skills
+  ansible.builtin.stat:
+    path: "{{ codex_skills_root }}/{{ item }}/SKILL.md"
+  loop: "{{ codex_skills_all }}"
+  loop_control:
+    label: "{{ item }}"
+  register: codex_skills_verify_files
+  changed_when: false
+
+- name: 计算缺失的 Codex Skills 验收项
+  ansible.builtin.set_fact:
+    codex_skills_verify_missing: >-
+      {{ codex_skills_verify_files.results
+         | rejectattr('stat.exists')
+         | map(attribute='item') | list }}
+
+- name: Codex Skills 缺失时报告验收失败
+  ansible.builtin.assert:
+    that: codex_skills_verify_missing | length == 0
+    fail_msg: >-
+      Codex Skills 未完整安装：{{ codex_skills_verify_missing | join(', ') }}。
+      请执行完整恢复流程并检查目标机对 npm registry/GitHub 的代理连接。
+
+- name: 输出 Codex Skills 验收状态
+  ansible.builtin.debug:
+    msg: "READY: 已找到 {{ codex_skills_all | length }} 个全局 Codex Skills。"

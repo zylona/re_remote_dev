@@ -108,3 +108,7 @@
         msg: >-
           {{ 'READY' if nvim_verify.rc == 0 else
           'READY_WITH_WARNINGS: Neovim 配置或插件未完整加载' }}
+    - name: 独立只读验收 Codex Skills
+      ansible.builtin.import_role:
+        name: codex_skills
+        tasks_from: verify

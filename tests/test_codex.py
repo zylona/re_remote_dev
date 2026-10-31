@@ -21,6 +21,27 @@ def test_codex_role_uses_official_staged_installer() -> None:
     assert 'export CODEX_HOME="$codex_home"' in shim
 
 
+def test_codex_skills_are_restored_via_mise_and_verified_read_only() -> None:
+    defaults = (ROOT / "roles/codex_skills/defaults/main.yml").read_text(encoding="utf-8")
+    tasks = (ROOT / "roles/codex_skills/tasks/main.yml").read_text(encoding="utf-8")
+    verify = (ROOT / "roles/codex_skills/tasks/verify.yml").read_text(encoding="utf-8")
+    docs = (ROOT / "docs/capabilities/codex-skills.md").read_text(encoding="utf-8")
+    play = (ROOT / "playbooks/plays/40_codex.yml").read_text(encoding="utf-8")
+
+    assert "Yuan1z0825/nature-skills" in defaults
+    assert "https://github.com/xingtaxueshu/literature-review-skills" in defaults
+    assert defaults.count("  - nature-") == 11
+    assert "literature-review-skills" in defaults
+    assert "npx" in tasks and "node@{{ codex_skills_node_version }}" in tasks
+    assert "--global" in tasks and "--agent" in tasks and "--copy" in tasks
+    assert "codex_skills_missing | intersect" in tasks
+    assert "codex_skills_root" in verify and "SKILL.md" in verify
+    assert "ansible.builtin.stat" in verify
+    assert "ansible.builtin.command" not in verify
+    assert "codex_skills" in play
+    assert "npx --yes skills list --global --agent codex" in docs
+
+
 def test_cc_switch_cli_is_pinned_and_user_scoped() -> None:
     defaults = (ROOT / "roles/cc_switch/defaults/main.yml").read_text(encoding="utf-8")
     tasks = (ROOT / "roles/cc_switch/tasks/main.yml").read_text(encoding="utf-8")

@@ -5,7 +5,7 @@
 [![License](https://img.shields.io/github/license/zylona/re_remote_dev)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Linux-333?logo=linux)](#支持范围)
 
-用一次受控运行，把一台可 SSH 登录的 Linux 主机恢复成现代远程开发环境：zsh、Antidote、Powerlevel10k、mise、fzf、zoxide、Zellij、eza、btop、gpustat、Neovim、Codex CLI 和 CC Switch CLI。项目采用 Ansible-first 设计，支持无外网目标机的临时 HTTP 代理，并保持普通 `ssh user@host` 的原生连接体验。
+用一次受控运行，把一台可 SSH 登录的 Linux 主机恢复成现代远程开发环境：zsh、Antidote、Powerlevel10k、mise（含 Node.js/npm/npx）、fzf、zoxide、Zellij、eza、btop、gpustat、Neovim、Codex CLI 和 CC Switch CLI。项目采用 Ansible-first 设计，支持无外网目标机的临时 HTTP 代理，并保持普通 `ssh user@host` 的原生连接体验。
 
 > 当前发布版本：`v0.1.27`。已在 Debian 13、Arch/Omarchy 和 openEuler 24.03 上完成真实回归，包含多窗口、多用户共享隧道、断线恢复和 30 分钟连续观察。默认不安装远端常驻 Agent、不开放公网端口、不保存密码或 API Token。
 
@@ -18,6 +18,7 @@
 - **多窗口稳定性**：Zellij 默认，tmux fallback；持久 ControlMaster 专用于代理/事件转发，普通 SSH 窗口使用独立连接，避免 Codex 流量拖慢终端输入。
 - **受控代理**：把控制端 `127.0.0.1:4227` 临时转发到目标机 loopback，失败和退出自动清理。
 - **多 Codex 账号**：远端安装固定版本的 CC Switch CLI，账号数据按目标用户隔离，不复制本机桌面账号。
+- **Codex Skills**：恢复时通过 mise 的 Node.js/npm/npx 安装 Nature 学术工具 Skills 和 literature-review-skills，并在 verify 中只读检查完整性。
 - **可验证、可重跑**：固定 Play 顺序、独立只读 verify、第二次 apply 幂等检查。
 - **可发布制品**：完整本地集成包可作为 GitHub Release tarball 独立安装和升级。
 
@@ -83,6 +84,14 @@ tdl codex              # 在 tmux 中打开/切换 Codex + Neovim + shell 工作
 可选监控工具：`btop` 直接运行即可；检测到 NVIDIA 驱动时还会安装 `gpustat`，可用
 `gpustat -cp` 查看 GPU、进程和显存占用。没有 NVIDIA GPU 或目标包源不可用时，`gpustat`
 会跳过且不影响其余恢复。
+
+Codex 全局 Skills 会安装到 `~/.agents/skills/`。查看已恢复的 Skills：
+
+```bash
+npx --yes skills list --global --agent codex
+```
+
+具体清单和代理要求见[Codex Skills 恢复说明](docs/capabilities/codex-skills.md)。
 
 ## 配置与再次运行
 

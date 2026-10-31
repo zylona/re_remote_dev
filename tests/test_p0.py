@@ -66,6 +66,15 @@ def test_tools_include_optional_btop_and_gpustat() -> None:
     assert "安装 gpustat 到用户工具目录" in tasks
 
 
+def test_tools_install_node_and_npx_with_mise() -> None:
+    defaults = (ROOT / "roles/tools/defaults/main.yml").read_text(encoding="utf-8")
+    tasks = (ROOT / "roles/tools/tasks/main.yml").read_text(encoding="utf-8")
+    assert "tools_node_version: \"{{ (remote_dev.versions | default({})).get('node', '22') }}\"" in defaults
+    assert 'install, "node@{{ tools_node_version }}"' in tasks
+    assert "node/npm/npx" in tasks
+    assert "离线模式检查 Node.js" in tasks
+
+
 def test_user_shell_provides_optional_eza_aliases() -> None:
     tasks = (ROOT / "roles/user_shell/tasks/main.yml").read_text(encoding="utf-8")
     assert "command -v eza" in tasks

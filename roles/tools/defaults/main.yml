@@ -7,6 +7,7 @@ tools_optional_system_packages:
   - eza
 tools_gpu_python_tool: gpustat
 tools_gpu_uv_version: latest
+tools_node_version: "{{ (remote_dev.versions | default({})).get('node', '22') }}"
 tools_install_dir: "{{ ansible_facts.user_dir }}/.local/bin"
 tools_zellij_version: "0.40.1"
 tools_fzf_version: "0.60.3"

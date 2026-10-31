@@ -1,0 +1,21 @@
+---
+codex_skills_mise_path: "{{ ansible_facts.user_dir }}/.local/bin/mise"
+codex_skills_node_version: "{{ (remote_dev.versions | default({})).get('node', '22') }}"
+codex_skills_root: "{{ ansible_facts.user_dir }}/.agents/skills"
+codex_skills_nature_repo: "Yuan1z0825/nature-skills"
+codex_skills_nature:
+  - nature-academic-search
+  - nature-citation
+  - nature-data
+  - nature-figure
+  - nature-paper2ppt
+  - nature-polishing
+  - nature-reader
+  - nature-response
+  - nature-reviewer
+  - nature-shared
+  - nature-writing
+codex_skills_literature_repo: "https://github.com/xingtaxueshu/literature-review-skills"
+codex_skills_literature:
+  - literature-review-skills
+codex_skills_all: "{{ codex_skills_nature + codex_skills_literature }}"

@@ -1,0 +1,80 @@
+---
+- name: 验证 mise 管理的 npx 可用
+  ansible.builtin.command:
+    argv:
+      - "{{ codex_skills_mise_path }}"
+      - exec
+      - "node@{{ codex_skills_node_version }}"
+      - --
+      - npx
+      - --version
+  register: codex_skills_npx_probe
+  changed_when: false
+  environment:
+    HOME: "{{ ansible_facts.user_dir }}"
+    PATH: "{{ ansible_facts.user_dir }}/.local/bin:/usr/local/bin:/usr/bin:/bin"
+
+- name: 检查所需 Codex Skills 是否已安装
+  ansible.builtin.stat:
+    path: "{{ codex_skills_root }}/{{ item }}/SKILL.md"
+  loop: "{{ codex_skills_all }}"
+  loop_control:
+    label: "{{ item }}"
+  register: codex_skills_presence
+
+- name: 计算缺失的 Codex Skills
+  ansible.builtin.set_fact:
+    codex_skills_missing: >-
+      {{ codex_skills_presence.results
+         | rejectattr('stat.exists')
+         | map(attribute='item') | list }}
+
+- name: 使用 Skills CLI 恢复 Nature Skills
+  ansible.builtin.command:
+    argv: >-
+      {{ [
+           codex_skills_mise_path,
+           'exec', 'node@' ~ codex_skills_node_version, '--',
+           'npx', '--yes', 'skills', 'add', codex_skills_nature_repo,
+           '--global', '--agent', 'codex'
+         ]
+         + (codex_skills_nature | map('regex_replace', '^', '--skill=') | list)
+         + ['--yes', '--copy'] }}
+  register: codex_skills_nature_install
+  changed_when: codex_skills_nature_install.rc == 0
+  when: codex_skills_missing | intersect(codex_skills_nature) | length > 0
+  environment:
+    HOME: "{{ ansible_facts.user_dir }}"
+    PATH: "{{ ansible_facts.user_dir }}/.local/bin:/usr/local/bin:/usr/bin:/bin"
+    http_proxy: "{{ remote_dev_temp_proxy_url | default(omit) }}"
+    https_proxy: "{{ remote_dev_temp_proxy_url | default(omit) }}"
+    HTTP_PROXY: "{{ remote_dev_temp_proxy_url | default(omit) }}"
+    HTTPS_PROXY: "{{ remote_dev_temp_proxy_url | default(omit) }}"
+
+- name: 使用 Skills CLI 恢复文献综述 Skill
+  ansible.builtin.command:
+    argv:
+      - "{{ codex_skills_mise_path }}"
+      - exec
+      - "node@{{ codex_skills_node_version }}"
+      - --
+      - npx
+      - --yes
+      - skills
+      - add
+      - "{{ codex_skills_literature_repo }}"
+      - --global
+      - --agent
+      - codex
+      - --yes
+      - --copy
+  register: codex_skills_literature_install
+  changed_when: codex_skills_literature_install.rc == 0
+  when: codex_skills_missing | intersect(codex_skills_literature) | length > 0
+  environment:
+    HOME: "{{ ansible_facts.user_dir }}"
+    PATH: "{{ ansible_facts.user_dir }}/.local/bin:/usr/local/bin:/usr/bin:/bin"
+    http_proxy: "{{ remote_dev_temp_proxy_url | default(omit) }}"
+    https_proxy: "{{ remote_dev_temp_proxy_url | default(omit) }}"
+    HTTP_PROXY: "{{ remote_dev_temp_proxy_url | default(omit) }}"
+    HTTPS_PROXY: "{{ remote_dev_temp_proxy_url | default(omit) }}"

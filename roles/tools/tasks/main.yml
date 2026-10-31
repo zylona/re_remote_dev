@@ -260,6 +260,66 @@
     https_proxy: "{{ remote_dev_temp_proxy_url | default(omit) }}"
     HTTP_PROXY: "{{ remote_dev_temp_proxy_url | default(omit) }}"
     HTTPS_PROXY: "{{ remote_dev_temp_proxy_url | default(omit) }}"
+- name: 检查 mise 管理的 Node.js
+  ansible.builtin.command:
+    argv: ["{{ tools_install_dir }}/mise", where, "node@{{ tools_node_version }}"]
+  register: tools_node_where
+  changed_when: false
+  failed_when: false
+  environment:
+    HOME: "{{ ansible_facts.user_dir }}"
+    PATH: "{{ tools_install_dir }}:/usr/local/bin:/usr/bin:/bin"
+- name: 离线模式检查 Node.js
+  ansible.builtin.assert:
+    that: tools_node_where.rc == 0
+    fail_msg: >-
+      离线模式缺少 mise Node.js {{ tools_node_version }}；请先在联网环境安装并缓存该版本，
+      或关闭 tools_offline 后重新恢复。
+  when: tools_offline | bool
+- name: 使用 mise 安装 Node.js（提供 node/npm/npx）
+  ansible.builtin.command:
+    argv: [timeout, "300", "{{ tools_install_dir }}/mise", install, "node@{{ tools_node_version }}"]
+  register: tools_node_install
+  changed_when: tools_node_install.rc == 0 and tools_node_where.rc != 0
+  when: not (tools_offline | bool)
+  environment:
+    HOME: "{{ ansible_facts.user_dir }}"
+    PATH: "{{ tools_install_dir }}:/usr/local/bin:/usr/bin:/bin"
+    http_proxy: "{{ remote_dev_temp_proxy_url | default(omit) }}"
+    https_proxy: "{{ remote_dev_temp_proxy_url | default(omit) }}"
+    HTTP_PROXY: "{{ remote_dev_temp_proxy_url | default(omit) }}"
+    HTTPS_PROXY: "{{ remote_dev_temp_proxy_url | default(omit) }}"
+- name: 检查 mise 当前 Node.js 版本
+  ansible.builtin.command:
+    argv: ["{{ tools_install_dir }}/mise", current, node]
+  register: tools_node_current
+  changed_when: false
+  failed_when: false
+  environment:
+    HOME: "{{ ansible_facts.user_dir }}"
+    PATH: "{{ tools_install_dir }}:/usr/local/bin:/usr/bin:/bin"
+- name: 配置 mise Node.js 为用户默认版本
+  ansible.builtin.command:
+    argv: ["{{ tools_install_dir }}/mise", use, --global, "node@{{ tools_node_version }}"]
+  register: tools_node_use
+  changed_when: false
+  environment:
+    HOME: "{{ ansible_facts.user_dir }}"
+    PATH: "{{ tools_install_dir }}:/usr/local/bin:/usr/bin:/bin"
+  when:
+    - tools_node_where.rc == 0 or tools_node_install.rc | default(1) | int == 0
+    - tools_node_current.rc | default(1) | int != 0 or not (tools_node_current.stdout | default('') is search('node ' ~ tools_node_version ~ '([.]|$)'))
+- name: 验证 mise Node.js 与 npx
+  ansible.builtin.command:
+    argv: ["{{ tools_install_dir }}/mise", exec, "node@{{ tools_node_version }}", --, "{{ item }}", --version]
+  loop: [node, npm, npx]
+  loop_control:
+    label: "{{ item }}"
+  register: tools_node_verify
+  changed_when: false
+  environment:
+    HOME: "{{ ansible_facts.user_dir }}"
+    PATH: "{{ tools_install_dir }}:/usr/local/bin:/usr/bin:/bin"
 - name: 安装 gpustat 到用户工具目录
   ansible.builtin.command:
     argv:
