@@ -1,4 +1,5 @@
 import ast
+import shlex
 from pathlib import Path
 
 
@@ -18,7 +19,10 @@ def test_codex_role_uses_official_staged_installer() -> None:
     assert "codex-package.json" in tasks
     assert "codex_controller_path" not in defaults
     assert 'nonce="${RDO_NONCE:-}"' in shim
-    assert 'export CODEX_HOME="$codex_home"' in shim
+    assert 'export CODEX_HOME="${CODEX_HOME:-$codex_home}"' in shim
+    assert 'auth_file="$CODEX_HOME/auth.json"' in shim
+    assert 'if [ "$CODEX_HOME" = "$codex_home" ]; then' in shim
+    assert '临时 CODEX_HOME 登录完成；跳过 daemon 重启。' in shim
 
 
 def test_codex_skills_are_restored_via_mise_and_verified_read_only() -> None:
@@ -42,27 +46,42 @@ def test_codex_skills_are_restored_via_mise_and_verified_read_only() -> None:
     assert "npx --yes skills list --global --agent codex" in docs
 
 
-def test_cc_switch_cli_is_pinned_and_user_scoped() -> None:
-    defaults = (ROOT / "roles/cc_switch/defaults/main.yml").read_text(encoding="utf-8")
-    tasks = (ROOT / "roles/cc_switch/tasks/main.yml").read_text(encoding="utf-8")
-    docs = (ROOT / "docs/capabilities/cc-switch-cli.md").read_text(encoding="utf-8")
-    assert 'cc_switch_cli_version: "5.11.2"' in defaults
-    assert "checksum: \"sha256:{{ cc_switch_cli_sha256 }}\"" in tasks
-    assert "cc_switch_cli_asset_name" in defaults
-    assert "cc_switch_cli_release_base_url" in defaults
-    assert 'url: "{{ cc_switch_cli_release_base_url }}/{{ cc_switch_cli_asset_name }}"' in tasks
-    assert "cc_switch_cli_install_dir: \"{{ ansible_facts.user_dir }}/.local/bin\"" in defaults
-    assert "cc_switch_cli_wrapper" not in defaults
-    assert "清理旧版 CC Switch CLI 包装器" in tasks
-    assert "cc-switch auth list" in docs
-    assert "cc-switch auth status" in docs
-    assert "cc-switch\n" in docs
-    assert "启动 TUI" in docs
-    assert "Set default" in docs
-    assert "--shared-sessions" in docs
-    assert "项目不修改其二进制" in docs
-    assert "provider quota" in docs
-    assert "codex logout" in docs
+def test_codexswitch_is_pinned_after_codex_and_node() -> None:
+    defaults = (ROOT / "roles/codexswitch/defaults/main.yml").read_text(encoding="utf-8")
+    tasks = (ROOT / "roles/codexswitch/tasks/main.yml").read_text(encoding="utf-8")
+    verify = (ROOT / "roles/codexswitch/tasks/verify.yml").read_text(encoding="utf-8")
+    play = (ROOT / "playbooks/plays/40_codex.yml").read_text(encoding="utf-8")
+    standalone_verify = (ROOT / "playbooks/plays/90_verify.yml").read_text(encoding="utf-8")
+    docs = (ROOT / "docs/capabilities/codexswitch.md").read_text(encoding="utf-8")
+    shim = (ROOT / "roles/codex/templates/codex-shim.sh.j2").read_text(encoding="utf-8")
+
+    assert 'codexswitch_version: "0.7.0"' in defaults
+    assert 'codexswitch_package: "@carjms/codexswitch"' in defaults
+    assert "node@{{ codexswitch_node_version }}" in tasks
+    assert "codexswitch_codex_path" in tasks
+    assert "npm" in tasks and "--ignore-scripts" in tasks
+    assert "tools_offline" in tasks
+    assert "codexswitch" in play and play.index("- codex") < play.index("- codexswitch")
+    assert "codexswitch" in standalone_verify and "tasks_from: verify" in standalone_verify
+    assert "ansible.builtin.command" in verify and "changed_when: false" in verify
+    assert "tcodex login" in docs and "tcodex use" in docs and "cxs run" in docs
+    assert 'help|-h|--help)' in shim
+    assert 'login)' in shim and 'list|import|remove)' in shim and 'use)' in shim
+    assert 'show_tcodex_help' in shim and 'tcodex remove <name>' in shim
+    assert 'export CODEX_SWITCH_CODEX_BIN="$tcodex_bin"' in shim
+    assert 'exec "$codexswitch_bin" login "$@"' not in shim
+    assert 'REMOTE_DEV_CODEXSWITCH_CODEX_CHILD=1' in shim
+    assert 'app-server daemon restart' in shim
+    assert "CODEX_SWITCH_CODEX_BIN" not in (ROOT / "roles/user_shell/tasks/main.yml").read_text(encoding="utf-8")
+
+
+def test_cc_switch_cli_is_not_in_recovery_flow() -> None:
+    play = (ROOT / "playbooks/plays/40_codex.yml").read_text(encoding="utf-8")
+    verify = (ROOT / "playbooks/plays/90_verify.yml").read_text(encoding="utf-8")
+    assert "cc_switch" not in play
+    assert "cc_switch" not in verify
+    assert not (ROOT / "roles/cc_switch").exists()
+    assert not (ROOT / "docs/capabilities/cc-switch-cli.md").exists()
 
 
 def test_login_command_uses_official_device_auth_and_forwarding() -> None:
@@ -84,14 +103,219 @@ def test_codex_role_deploys_non_blocking_lifecycle_shim() -> None:
     assert 'timeout=0.15' in sender
     assert 'except (OSError, ValueError)' in sender
     assert 'cc-switch start codex default' not in shim
-    assert 'CC Switch is intentionally not injected' in shim
+    assert 'CodexSwitch is intentionally not injected' in shim
     assert 'OAuth/callback entrypoint' in shim
     assert '"$real" login status' in shim
     assert 'auth.json' in shim
     assert '"$@" --no-daemon' in shim
+    assert 'if [ "${1-}" != "login" ]; then' in shim
     assert 'OAuth 回调未完成' in shim
     assert '"$real" login status' in shim
     assert 'app-server daemon restart' in shim
+
+
+def test_tcodex_supports_codexswitch_isolated_login_home(tmp_path: Path) -> None:
+    template = (ROOT / "roles/codex/templates/codex-shim.sh.j2").read_text(encoding="utf-8")
+    home = tmp_path / "home"
+    codex_home = home / ".codex"
+    libexec = home / ".local/libexec"
+    local_bin = home / ".local/bin"
+    nonce_file = home / ".config/remote-dev/session.nonce"
+    codex_home.mkdir(parents=True)
+    libexec.mkdir(parents=True)
+    local_bin.mkdir(parents=True)
+    fake_codex = tmp_path / "codex"
+    fake_codex.write_text(
+        "#!/bin/sh\n"
+        "case \"$1\" in\n"
+        "  --version) echo 'codex fake'; exit 0 ;;\n"
+        "  login) mkdir -p \"$CODEX_HOME\"; printf '{}' > \"$CODEX_HOME/auth.json\"; exit 0 ;;\n"
+        "  app-server) echo daemon-restarted >> \"$HOME/codex.log\"; exit 0 ;;\n"
+        "  esac\n"
+        "  if [ \"$1\" = status ]; then test -s \"$CODEX_HOME/auth.json\"; exit; fi\n"
+        "  exit 0\n",
+        encoding="utf-8",
+    )
+    fake_codex.chmod(0o755)
+    shim = tmp_path / "tcodex"
+    (local_bin / "mise").write_text("#!/bin/sh\nshift; shift; exec \"$@\"\n", encoding="utf-8")
+    (local_bin / "mise").chmod(0o755)
+    fake_codexswitch = local_bin / "codexswitch"
+    fake_codexswitch.write_text(
+        "#!/bin/sh\nprintf '%s\\n' \"$CODEX_SWITCH_CODEX_BIN|$*\" > \"$HOME/codexswitch.log\"\n",
+        encoding="utf-8",
+    )
+    fake_codexswitch.chmod(0o755)
+    replacements = {
+        "{{ codex_real_binary | quote }}": shlex.quote(str(fake_codex)),
+        "{{ codex_home | quote }}": shlex.quote(str(codex_home)),
+        "{{ codex_shim | quote }}": shlex.quote(str(shim)),
+        "{{ codex_libexec_dir | quote }}": shlex.quote(str(libexec)),
+        "{{ codex_target_digest | default('unknown') | quote }}": "'test-target'",
+        "{{ codex_nonce_file | default(ansible_facts.user_dir ~ '/.config/remote-dev/session.nonce') | quote }}": shlex.quote(str(nonce_file)),
+    }
+    for source, replacement in replacements.items():
+        template = template.replace(source, replacement)
+    shim.write_text(template, encoding="utf-8")
+    shim.chmod(0o755)
+
+    import os
+    import subprocess
+
+    env = {**os.environ, "HOME": str(home), "CODEX_HOME": str(tmp_path / "codexswitch-login-tmp")}
+    version = subprocess.run([str(shim), "--version"], env=env, text=True, capture_output=True, check=False)
+    login = subprocess.run(
+        [str(shim), "login"],
+        env={**env, "REMOTE_DEV_CODEXSWITCH_CODEX_CHILD": "1"},
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    switched_login = subprocess.run(
+        [str(shim), "cxs", "login", "work"], env=env, text=True, capture_output=True, check=False
+    )
+
+    assert version.returncode == 0 and "codex fake" in version.stdout
+    assert login.returncode == 0
+    assert (tmp_path / "codexswitch-login-tmp/auth.json").is_file()
+    assert "临时 CODEX_HOME 登录完成；跳过 daemon 重启。" in login.stderr
+    assert not (home / "codex.log").exists()
+    assert switched_login.returncode == 0
+    assert (home / "codexswitch.log").read_text(encoding="utf-8").strip() == f"{shim}|login work"
+
+
+def test_tcodex_account_commands_restart_daemon_only_after_successful_use(tmp_path: Path) -> None:
+    template = (ROOT / "roles/codex/templates/codex-shim.sh.j2").read_text(encoding="utf-8")
+    home = tmp_path / "home"
+    codex_home = home / ".codex"
+    libexec = home / ".local/libexec"
+    local_bin = home / ".local/bin"
+    mise_bin = local_bin / "mise"
+    codex_home.mkdir(parents=True)
+    libexec.mkdir(parents=True)
+    local_bin.mkdir(parents=True)
+    (home / "calls.log").touch()
+    fake_codex = local_bin / "codex"
+    fake_codex.write_text(
+        "#!/bin/sh\n"
+        "printf 'codex:%s\\n' \"$*\" >> \"$HOME/calls.log\"\n"
+        "exit 0\n",
+        encoding="utf-8",
+    )
+    fake_codex.chmod(0o755)
+    mise_bin.write_text(
+        "#!/bin/sh\n"
+        "shift\n"
+        "shift\n"
+        "exec \"$@\"\n",
+        encoding="utf-8",
+    )
+    mise_bin.chmod(0o755)
+    fake_cxs = local_bin / "codexswitch"
+    fake_cxs.write_text(
+        "#!/bin/sh\n"
+        "printf 'cxs:%s\\n' \"$*\" >> \"$HOME/calls.log\"\n"
+        "[ \"${CXS_FAIL:-0}\" = 0 ]\n",
+        encoding="utf-8",
+    )
+    fake_cxs.chmod(0o755)
+    shim = home / ".local/share/remote-dev/bin/tcodex"
+    shim.parent.mkdir(parents=True)
+    replacements = {
+        "{{ codex_real_binary | quote }}": shlex.quote(str(fake_codex)),
+        "{{ codex_home | quote }}": shlex.quote(str(codex_home)),
+        "{{ codex_shim | quote }}": shlex.quote(str(shim)),
+        "{{ codex_libexec_dir | quote }}": shlex.quote(str(libexec)),
+        "{{ codex_target_digest | default('unknown') | quote }}": "'test-target'",
+        "{{ codex_nonce_file | default(ansible_facts.user_dir ~ '/.config/remote-dev/session.nonce') | quote }}": shlex.quote(str(home / "nonce")),
+    }
+    for source, replacement in replacements.items():
+        template = template.replace(source, replacement)
+    shim.write_text(template, encoding="utf-8")
+    shim.chmod(0o755)
+
+    import os
+    import subprocess
+
+    env = {**os.environ, "HOME": str(home), "CODEX_HOME": str(codex_home)}
+    use = subprocess.run([str(shim), "use", "work"], env=env, text=True, capture_output=True, check=False)
+    failed_use = subprocess.run(
+        [str(shim), "use", "missing"], env={**env, "CXS_FAIL": "1"}, text=True, capture_output=True, check=False
+    )
+    listing = subprocess.run([str(shim), "list"], env=env, text=True, capture_output=True, check=False)
+    importing = subprocess.run([str(shim), "import", "work"], env=env, text=True, capture_output=True, check=False)
+    removing = subprocess.run([str(shim), "remove", "old"], env=env, text=True, capture_output=True, check=False)
+    help_result = subprocess.run([str(shim), "help"], env=env, text=True, capture_output=True, check=False)
+
+    assert use.returncode == 0
+    assert "daemon restart" in (home / "calls.log").read_text(encoding="utf-8")
+    calls = (home / "calls.log").read_text(encoding="utf-8").splitlines()
+    assert calls[:2] == ["cxs:use work", "codex:app-server daemon restart"]
+    assert failed_use.returncode != 0
+    assert calls.count("codex:app-server daemon restart") == 1
+    assert listing.returncode == 0 and "cxs:list" in calls
+    assert importing.returncode == 0 and "cxs:import work" in calls
+    assert removing.returncode == 0 and calls[-1] == "cxs:remove old"
+    assert calls.count("codex:app-server daemon restart") == 1
+    assert help_result.returncode == 0
+    assert "tcodex login <name>" in help_result.stdout
+    assert "tcodex remove <name>" in help_result.stdout
+    assert "daemon" in help_result.stdout
+    assert "cxs:help" not in (home / "calls.log").read_text(encoding="utf-8")
+
+
+def test_tcodex_login_routes_nested_codex_binary_without_recursing(tmp_path: Path) -> None:
+    template = (ROOT / "roles/codex/templates/codex-shim.sh.j2").read_text(encoding="utf-8")
+    home = tmp_path / "home"
+    local_bin = home / ".local/bin"
+    libexec = home / ".local/libexec"
+    codex_home = home / ".codex"
+    local_bin.mkdir(parents=True)
+    libexec.mkdir(parents=True)
+    codex_home.mkdir(parents=True)
+    fake_codex = local_bin / "codex"
+    fake_codex.write_text(
+        "#!/bin/sh\n"
+        "printf 'official:%s:%s\\n' \"$*\" \"${REMOTE_DEV_CODEXSWITCH_CODEX_CHILD:-}\" >> \"$HOME/calls.log\"\n"
+        "if [ \"$1\" = login ]; then mkdir -p \"$CODEX_HOME\"; printf '{}' > \"$CODEX_HOME/auth.json\"; fi\n"
+        "exit 0\n",
+        encoding="utf-8",
+    )
+    fake_codex.chmod(0o755)
+    fake_cxs = local_bin / "codexswitch"
+    fake_cxs.write_text(
+        "#!/bin/sh\n"
+        "printf 'manager:%s:%s\\n' \"$*\" \"$CODEX_SWITCH_CODEX_BIN\" >> \"$HOME/calls.log\"\n"
+        "CODEX_HOME=\"$HOME/.codex-switch-login\" \"$CODEX_SWITCH_CODEX_BIN\" login\n",
+        encoding="utf-8",
+    )
+    fake_cxs.chmod(0o755)
+    (local_bin / "mise").write_text("#!/bin/sh\nshift; shift; exec \"$@\"\n", encoding="utf-8")
+    (local_bin / "mise").chmod(0o755)
+    shim = home / ".local/share/remote-dev/bin/tcodex"
+    shim.parent.mkdir(parents=True)
+    replacements = {
+        "{{ codex_real_binary | quote }}": shlex.quote(str(fake_codex)),
+        "{{ codex_home | quote }}": shlex.quote(str(codex_home)),
+        "{{ codex_shim | quote }}": shlex.quote(str(shim)),
+        "{{ codex_libexec_dir | quote }}": shlex.quote(str(libexec)),
+        "{{ codex_target_digest | default('unknown') | quote }}": "'test-target'",
+        "{{ codex_nonce_file | default(ansible_facts.user_dir ~ '/.config/remote-dev/session.nonce') | quote }}": shlex.quote(str(home / "nonce")),
+    }
+    for source, replacement in replacements.items():
+        template = template.replace(source, replacement)
+    shim.write_text(template, encoding="utf-8")
+    shim.chmod(0o755)
+
+    import os
+    import subprocess
+
+    result = subprocess.run([str(shim), "login", "personal"], env={**os.environ, "HOME": str(home)}, text=True, capture_output=True, check=False)
+    calls = (home / "calls.log").read_text(encoding="utf-8").splitlines()
+    assert result.returncode == 0
+    assert calls[0].startswith("manager:login personal:")
+    assert calls[1] == "official:login:1"
+    assert (home / ".codex-switch-login/auth.json").is_file()
 
 
 def test_codex_role_exposes_installed_binary_on_user_path() -> None:

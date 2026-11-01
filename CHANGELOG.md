@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- 恢复流程改为安装固定版本 CodexSwitch（依赖官方 Codex CLI 和 mise Node.js），并从默认 apply/verify 中移除 CC Switch CLI。
+- 新增统一账号入口 `tcodex login/list/use/import/remove`，命令仍由官方 CodexSwitch 执行。
+- 新增 `tcodex help` 命令，显示账号管理和官方 Codex 参数入口用法。
+- `tcodex use <name>` 切换成功后自动重启当前用户当前 `CODEX_HOME` 的 Codex daemon；失败切换不会重启。
+- 保留 `tcodex cxs login <name>` 作为兼容入口，并维持登录回调到本机浏览器的流程。
 - 修复 `tcodex` 在 `tssh` 交互式会话中无法读取短生命周期 `RDO_NONCE`，导致 OAuth 事件未发送、本地浏览器无法自动打开的问题。
 
 ## [0.1.31]

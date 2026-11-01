@@ -1,0 +1,7 @@
+---
+galaxy_info:
+  author: remote-dev
+  description: Install and verify CodexSwitch after Codex CLI and mise Node.js
+  license: MIT
+  min_ansible_version: '2.15'
+dependencies: []

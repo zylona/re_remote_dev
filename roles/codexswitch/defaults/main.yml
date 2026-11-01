@@ -1,0 +1,12 @@
+---
+codexswitch_package: "@carjms/codexswitch"
+codexswitch_version: "0.7.0"
+codexswitch_node_version: "{{ (remote_dev.versions | default({})).get('node', '22') }}"
+codexswitch_install_root: "{{ ansible_facts.user_dir }}/.local/share/remote-dev/codexswitch"
+codexswitch_install_dir: "{{ ansible_facts.user_dir }}/.local/bin"
+codexswitch_package_dir: "{{ codexswitch_install_root }}/node_modules/@carjms/codexswitch"
+codexswitch_manifest: "{{ codexswitch_package_dir }}/package.json"
+codexswitch_cli_bin: "{{ codexswitch_install_root }}/node_modules/.bin/codexswitch"
+codexswitch_short_bin: "{{ codexswitch_install_root }}/node_modules/.bin/cxs"
+codexswitch_mise_path: "{{ ansible_facts.user_dir }}/.local/bin/mise"
+codexswitch_codex_path: "{{ ansible_facts.user_dir }}/.local/bin/codex"

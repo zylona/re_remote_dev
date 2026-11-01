@@ -1,0 +1,181 @@
+---
+- name: 验证 CodexSwitch 依赖的官方 Codex CLI
+  ansible.builtin.command:
+    argv: ["{{ codexswitch_codex_path }}", --version]
+  register: codexswitch_codex_probe
+  changed_when: false
+  failed_when: false
+  environment:
+    HOME: "{{ ansible_facts.user_dir }}"
+    CODEX_HOME: "{{ ansible_facts.user_dir }}/.codex"
+    PATH: "{{ codexswitch_install_dir }}:/usr/local/bin:/usr/bin:/bin"
+
+- name: 验证 mise 管理的 Node.js
+  ansible.builtin.command:
+    argv:
+      - "{{ codexswitch_mise_path }}"
+      - exec
+      - "node@{{ codexswitch_node_version }}"
+      - --
+      - node
+      - --version
+  register: codexswitch_node_probe
+  changed_when: false
+  failed_when: false
+  environment:
+    HOME: "{{ ansible_facts.user_dir }}"
+    PATH: "{{ codexswitch_install_dir }}:/usr/local/bin:/usr/bin:/bin"
+
+- name: 验证 CodexSwitch 所需的 npm
+  ansible.builtin.command:
+    argv:
+      - "{{ codexswitch_mise_path }}"
+      - exec
+      - "node@{{ codexswitch_node_version }}"
+      - --
+      - npm
+      - --version
+  register: codexswitch_npm_probe
+  changed_when: false
+  failed_when: false
+  environment:
+    HOME: "{{ ansible_facts.user_dir }}"
+    PATH: "{{ codexswitch_install_dir }}:/usr/local/bin:/usr/bin:/bin"
+
+- name: CodexSwitch 依赖缺失时停止安装
+  ansible.builtin.assert:
+    that:
+      - codexswitch_codex_probe.rc == 0
+      - codexswitch_node_probe.rc == 0
+      - codexswitch_npm_probe.rc == 0
+    fail_msg: >-
+      CodexSwitch 需要可执行的官方 Codex CLI 和 mise Node.js/npm {{ codexswitch_node_version }}；
+      请先检查 codex 与 mise Node.js 恢复结果。
+
+- name: 创建 CodexSwitch 用户目录
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: "{{ remote_dev.target_user }}"
+    mode: '0755'
+  loop:
+    - "{{ codexswitch_install_root }}"
+    - "{{ codexswitch_install_dir }}"
+
+- name: 检查已安装的 CodexSwitch package
+  ansible.builtin.stat:
+    path: "{{ codexswitch_manifest }}"
+  register: codexswitch_manifest_stat
+  changed_when: false
+
+- name: 读取已安装的 CodexSwitch package 版本
+  ansible.builtin.slurp:
+    src: "{{ codexswitch_manifest }}"
+  register: codexswitch_manifest_content
+  when: codexswitch_manifest_stat.stat.exists
+
+- name: 设置当前 CodexSwitch package 版本
+  ansible.builtin.set_fact:
+    codexswitch_installed_version: >-
+      {{ (codexswitch_manifest_content.content | b64decode | from_json).version }}
+  when: codexswitch_manifest_stat.stat.exists
+
+- name: 初始化 CodexSwitch package 版本状态
+  ansible.builtin.set_fact:
+    codexswitch_installed_version: "{{ codexswitch_installed_version | default('') }}"
+
+- name: 检查 CodexSwitch 命令文件
+  ansible.builtin.stat:
+    path: "{{ item }}"
+  loop:
+    - "{{ codexswitch_cli_bin }}"
+    - "{{ codexswitch_short_bin }}"
+  register: codexswitch_bin_stats
+  changed_when: false
+
+- name: 记录 CodexSwitch package 是否完整
+  ansible.builtin.set_fact:
+    codexswitch_package_ready: >-
+      {{ codexswitch_installed_version == codexswitch_version and
+         (codexswitch_bin_stats.results | selectattr('stat.exists', 'equalto', true) | list | length) == 2 }}
+
+- name: 离线模式检查 CodexSwitch
+  ansible.builtin.assert:
+    that: codexswitch_package_ready | bool
+    fail_msg: >-
+      离线模式缺少 CodexSwitch {{ codexswitch_version }}；请在联网环境预装该版本后再执行恢复。
+  when: tools_offline | default(false) | bool
+
+- name: 通过 mise Node.js 安装固定版本 CodexSwitch
+  ansible.builtin.command:
+    argv:
+      - "{{ codexswitch_mise_path }}"
+      - exec
+      - "node@{{ codexswitch_node_version }}"
+      - --
+      - npm
+      - install
+      - --prefix
+      - "{{ codexswitch_install_root }}"
+      - --no-save
+      - --no-package-lock
+      - --ignore-scripts
+      - --no-audit
+      - --no-fund
+      - "{{ codexswitch_package }}@{{ codexswitch_version }}"
+  register: codexswitch_install
+  changed_when: codexswitch_install.rc == 0
+  when:
+    - not (tools_offline | default(false) | bool)
+    - not (codexswitch_package_ready | bool)
+  environment:
+    HOME: "{{ ansible_facts.user_dir }}"
+    PATH: "{{ codexswitch_install_dir }}:/usr/local/bin:/usr/bin:/bin"
+    http_proxy: "{{ remote_dev_temp_proxy_url | default(omit) }}"
+    https_proxy: "{{ remote_dev_temp_proxy_url | default(omit) }}"
+    HTTP_PROXY: "{{ remote_dev_temp_proxy_url | default(omit) }}"
+    HTTPS_PROXY: "{{ remote_dev_temp_proxy_url | default(omit) }}"
+
+- name: 创建 codexswitch 命令入口
+  ansible.builtin.file:
+    src: "{{ codexswitch_cli_bin }}"
+    dest: "{{ codexswitch_install_dir }}/codexswitch"
+    state: link
+    force: true
+    owner: "{{ remote_dev.target_user }}"
+
+- name: 创建 cxs 命令入口
+  ansible.builtin.file:
+    src: "{{ codexswitch_short_bin }}"
+    dest: "{{ codexswitch_install_dir }}/cxs"
+    state: link
+    force: true
+    owner: "{{ remote_dev.target_user }}"
+
+- name: 验证 CodexSwitch 命令入口
+  ansible.builtin.command:
+    argv:
+      - "{{ codexswitch_mise_path }}"
+      - exec
+      - "node@{{ codexswitch_node_version }}"
+      - --
+      - "{{ item }}"
+      - --help
+  loop:
+    - "{{ codexswitch_install_dir }}/codexswitch"
+    - "{{ codexswitch_install_dir }}/cxs"
+  loop_control:
+    label: "{{ item | basename }}"
+  register: codexswitch_verify
+  changed_when: false
+  environment:
+    HOME: "{{ ansible_facts.user_dir }}"
+    CODEX_HOME: "{{ ansible_facts.user_dir }}/.codex"
+    PATH: "{{ codexswitch_install_dir }}:/usr/local/bin:/usr/bin:/bin"
+
+- name: CodexSwitch 安装失败时停止恢复
+  ansible.builtin.assert:
+    that:
+      - (codexswitch_verify.results | selectattr('rc', 'ne', 0) | list | length) == 0
+    fail_msg: >-
+      CodexSwitch {{ codexswitch_version }} 无法启动；请检查 Node.js、Codex CLI、npm registry 代理和用户目录权限。

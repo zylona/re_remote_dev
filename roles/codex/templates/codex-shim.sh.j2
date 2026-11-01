@@ -4,10 +4,12 @@
 set -u
 real={{ codex_real_binary | quote }}
 codex_home={{ codex_home | quote }}
-# Keep the browser-login flow and the normal `codex` command on the same
-# authentication store.  CC Switch may export a temporary CODEX_HOME for its
-# own client; tcodex must not accidentally write credentials there.
-export CODEX_HOME="$codex_home"
+tcodex_bin={{ codex_shim | quote }}
+# Preserve an explicit CODEX_HOME. CodexSwitch's documented login command
+# starts Codex with an isolated temporary home; forcing the default home here
+# would make its login/import transaction fail. Direct tcodex use still defaults
+# to the normal project-managed Codex home.
+export CODEX_HOME="${CODEX_HOME:-$codex_home}"
 # The official installer may move the active package and rewrite its own
 # ~/.local/bin/codex link. Resolve that official entrypoint at invocation time
 # so tcodex keeps following normal Codex self-updates.
@@ -17,14 +19,116 @@ for candidate in "$HOME/.local/bin/codex" "$HOME/.codex/packages/standalone/curr
     break
   fi
 done
-# CC Switch is intentionally not injected here. `tcodex` is the project-owned
-# OAuth/callback entrypoint; account selection remains explicit through the
-# official CC Switch TUI/commands and never changes the official `codex` binary.
+# CodexSwitch is a thin command-line account manager. Keep its account database
+# and commands upstream-owned, while routing login through this shim so OAuth
+# URLs still reach the local browser. The marker is inherited only by the
+# CodexSwitch child; when it invokes tcodex as its Codex binary, that nested
+# call bypasses this dispatcher and runs the official Codex login flow.
+run_codexswitch() {
+  codexswitch_bin="$HOME/.local/bin/codexswitch"
+  mise_bin="$HOME/.local/bin/mise"
+  if [ ! -x "$codexswitch_bin" ]; then
+    printf '%s\n' 'tcodex: 未找到 CodexSwitch；请先运行远程环境恢复。' >&2
+    return 127
+  fi
+  if [ -x "$mise_bin" ]; then
+    "$mise_bin" exec -- "$codexswitch_bin" "$@"
+  elif command -v node >/dev/null 2>&1; then
+    "$codexswitch_bin" "$@"
+  else
+    printf '%s\n' 'tcodex: 未找到 mise Node.js；请检查远程环境恢复。' >&2
+    return 127
+  fi
+}
+
+restart_codex_daemon() {
+  printf '%s\n' 'tcodex: 账号已切换，正在重启当前 CODEX_HOME 的 Codex daemon…' >&2
+  if ! timeout 20 "$real" app-server daemon restart >/dev/null 2>&1; then
+    printf '%s\n' 'tcodex: 账号已切换，但 daemon 重启失败；可手动执行 codex app-server daemon restart。' >&2
+    return 1
+  fi
+  printf '%s\n' 'tcodex: Codex daemon 已重启，新会话将使用当前账号。' >&2
+}
+
+show_tcodex_help() {
+  cat <<'EOF'
+tcodex — Codex CLI 与 CodexSwitch 账号管理入口
+
+用法：
+  tcodex                         启动官方 Codex CLI
+  tcodex login <name>            登录并保存一个账号（支持本机浏览器回调）
+  tcodex list                    列出已保存的账号
+  tcodex use <name>              切换当前账号并重启当前 CODEX_HOME 的 Codex daemon
+  tcodex import [name]           将当前 Codex 登录导入账号库
+  tcodex remove <name>           从账号库删除指定账号
+  tcodex help                    显示此帮助
+
+未列出的参数会传给官方 Codex CLI，例如：tcodex resume
+兼容旧入口：tcodex cxs login <name>
+
+注意：use 会重启当前 CODEX_HOME 的 daemon，可能中断该 daemon 管理的 Codex 会话。
+EOF
+}
+
+if [ "${REMOTE_DEV_CODEXSWITCH_CODEX_CHILD:-}" != 1 ]; then
+  case "${1-}" in
+    help|-h|--help)
+      show_tcodex_help
+      exit 0
+      ;;
+    login)
+      shift
+      export CODEX_SWITCH_CODEX_BIN="$tcodex_bin"
+      export REMOTE_DEV_CODEXSWITCH_CODEX_CHILD=1
+      run_codexswitch login "$@"
+      exit $?
+      ;;
+    list|import|remove)
+      command="$1"
+      shift
+      run_codexswitch "$command" "$@"
+      exit $?
+      ;;
+    use)
+      shift
+      run_codexswitch use "$@"
+      status=$?
+      if [ "$status" -ne 0 ]; then
+        exit "$status"
+      fi
+      restart_codex_daemon || exit 1
+      exit 0
+      ;;
+    cxs)
+      shift
+      if [ "${1-}" != "login" ]; then
+        printf '%s\n' 'usage: tcodex login [account-name]' >&2
+        exit 2
+      fi
+      shift
+      export CODEX_SWITCH_CODEX_BIN="$tcodex_bin"
+      export REMOTE_DEV_CODEXSWITCH_CODEX_CHILD=1
+      run_codexswitch login "$@"
+      exit $?
+      ;;
+  esac
+fi
+# CodexSwitch is intentionally not injected here. `tcodex` is the project-owned
+# OAuth/callback entrypoint; account selection stays explicit through CodexSwitch
+# commands and never changes the official `codex` binary.
 event_sender={{ codex_libexec_dir | quote }}/remote-dev-codex-event.py
 pty_runner={{ codex_libexec_dir | quote }}/remote-dev-codex-pty.py
 target={{ codex_target_digest | default('unknown') | quote }}
 nonce_file={{ codex_nonce_file | default(ansible_facts.user_dir ~ '/.config/remote-dev/session.nonce') | quote }}
-auth_file={{ codex_home | quote }}/auth.json
+auth_file="$CODEX_HOME/auth.json"
+# CodexSwitch probes its configured Codex executable with --version before it
+# runs `cxs login`. Keep metadata/help commands native even before any account
+# exists; otherwise the login postcondition would incorrectly require auth.
+case "${1-}" in
+  --version|-V|--help|-h|help)
+    exec "$real" "$@"
+    ;;
+esac
 # `tssh` sessions carry the current short-lived nonce in the process
 # environment. Prefer it over the shared file: an interrupted SSH session can
 # leave a stale file behind, and sending that nonce makes the orchestrator
@@ -52,15 +156,17 @@ fi
 if [ -n "$nonce" ] && [ -x "$event_sender" ]; then
   python3 "$event_sender" CODEX_START "$target" "$nonce" "$$" >/dev/null 2>&1 || true
 fi
-# Authentication must run in the foreground process.  A managed app-server
-# can outlive an SSH/tssh lease and retain a dead 4227 proxy environment;
-# using --no-daemon for the login flow avoids routing the token exchange
-# through a stale daemon while preserving the native Codex command afterwards.
-run_args="$*"
-case " $run_args " in
-  *" --no-daemon "*) : ;;
-  *) set -- "$@" --no-daemon ;;
-esac
+# Authentication must run in the foreground process. `codex login` is already
+# a foreground command and newer official Codex versions reject `--no-daemon`
+# on that subcommand. For other unauthenticated launches, avoid inheriting a
+# stale app-server proxy environment from an older SSH/tssh lease.
+if [ "${1-}" != "login" ]; then
+  run_args="$*"
+  case " $run_args " in
+    *" --no-daemon "*) : ;;
+    *) set -- "$@" --no-daemon ;;
+  esac
+fi
 if [ -x "$pty_runner" ] && [ -t 1 ]; then
   python3 "$pty_runner" "$event_sender" "$target" "$nonce" "$real" "$@"
 else
@@ -82,8 +188,15 @@ if [ "$status" -eq 0 ] && [ "$logged_in" -eq 0 ]; then
   # A previous daemon may have started before authentication (or under a
   # stale tssh lease). Restart only the official daemon controlled by this
   # CODEX_HOME so the next plain `codex` session observes the new auth state.
-  if ! timeout 15 "$real" app-server daemon restart >/dev/null 2>&1; then
-    printf '%s\n' 'tcodex: 登录已写入认证文件，但官方 Codex daemon 重启失败；可稍后执行 codex app-server daemon restart。' >&2
+  if [ "$CODEX_HOME" = "$codex_home" ]; then
+    if ! timeout 15 "$real" app-server daemon restart >/dev/null 2>&1; then
+      printf '%s\n' 'tcodex: 登录已写入认证文件，但官方 Codex daemon 重启失败；可稍后执行 codex app-server daemon restart。' >&2
+    fi
+  else
+    # Isolated account login (for example `cxs login`) uses a temporary
+    # CODEX_HOME that is removed after credentials are imported. Never start a
+    # persistent daemon against that short-lived directory.
+    printf '%s\n' 'tcodex: 临时 CODEX_HOME 登录完成；跳过 daemon 重启。' >&2
   fi
 fi
 exit "$status"

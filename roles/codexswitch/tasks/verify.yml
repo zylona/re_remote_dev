@@ -1,0 +1,29 @@
+---
+- name: 只读验证 CodexSwitch 命令入口
+  ansible.builtin.command:
+    argv:
+      - "{{ codexswitch_mise_path }}"
+      - exec
+      - "node@{{ codexswitch_node_version }}"
+      - --
+      - "{{ item }}"
+      - --help
+  loop:
+    - "{{ codexswitch_install_dir }}/codexswitch"
+    - "{{ codexswitch_install_dir }}/cxs"
+  loop_control:
+    label: "{{ item | basename }}"
+  register: codexswitch_readonly_verify
+  changed_when: false
+  failed_when: false
+  environment:
+    HOME: "{{ ansible_facts.user_dir }}"
+    CODEX_HOME: "{{ ansible_facts.user_dir }}/.codex"
+    PATH: "{{ codexswitch_install_dir }}:/usr/local/bin:/usr/bin:/bin"
+
+- name: 输出 CodexSwitch 验收状态
+  ansible.builtin.debug:
+    msg: >-
+      {{ 'READY: CodexSwitch 与 cxs 均可启动' if
+         (codexswitch_readonly_verify.results | selectattr('rc', 'ne', 0) | list | length) == 0 else
+         'FAILED: CodexSwitch 命令入口不可用；请重新运行 site.yml' }}

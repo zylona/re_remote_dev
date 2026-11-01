@@ -162,7 +162,10 @@ app-server。它强制使用目标用户的默认 `CODEX_HOME`，并在 OAuth �
 `codex login status`；浏览器页面完成但 token exchange 未落盘时返回失败，不会误报为已登录。
 认证成功后只重启该 `CODEX_HOME` 对应的官方 daemon，确保后续普通 `codex` 会话读取刚写入的
 认证状态；重启失败会给出可执行提示，但不会撤销已保存的认证。
-VS Code、CC Switch 或其他用户会话的 daemon 不会被 tcodex 关闭或接管。
+VS Code、CodexSwitch 隔离账号会话或其他用户会话的 daemon 不会被 tcodex 关闭或接管。
+CodexSwitch 账号入口为 `tcodex login/list/use/import/remove`；这些操作调用官方 CodexSwitch，`use`
+成功后通过官方 Codex 命令重启当前用户、当前 `CODEX_HOME` 的 daemon，使后续会话读取新账号。
+CodexSwitch 的隔离账号会话数据不变。
 
 ## P6 可选长期会话
 
