@@ -224,6 +224,9 @@ SSH 或 VS Code 连接；已经运行的 tssh 终端也不会被强制关闭，�
 CodexSwitch 提供远端 Codex 多账号保存和按账号启动。日常通过 `tcodex login <name>`、
 `tcodex list`、`tcodex use <name>`、`tcodex import [name]` 和 `tcodex remove <name>` 管理账号；登录继续通过本机浏览器
 完成 OAuth 回调，切换成功后会重启当前用户当前 `CODEX_HOME` 的 Codex daemon，让新会话采用新账号。
+无远端浏览器时可用 `tcodex login <name> --device-auth`，在任意浏览器输入终端显示的一次性代码；
+账号仍由 CodexSwitch 管理。
+`tcodex` 只接受帮助和账号管理命令；未知命令会显示帮助并报错。Codex 原生参数请直接运行 `codex`。
 运行 `tcodex help` 查看命令用法。账号管理和隔离会话说明见
 [CodexSwitch 使用说明](docs/capabilities/codexswitch.md)。
 

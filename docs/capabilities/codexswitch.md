@@ -7,6 +7,8 @@
 
 `tcodex` 提供面向日常使用的统一入口；底层命令仍由官方 CodexSwitch 执行。
 运行 `tcodex help` 可查看账号管理命令摘要。
+`tcodex` 只接受帮助、登录、账号列表、切换、导入和删除等列出的命令；不带参数时启动官方
+Codex，未知命令或多余参数会显示帮助并以错误状态退出。Codex 原生命令参数请直接使用 `codex`。
 
 ## 登录与账号列表
 
@@ -20,6 +22,18 @@ tcodex login work
 tcodex list
 tcodex remove old-account
 ```
+
+无远端浏览器时，可明确选择官方 Codex CLI 的设备码流程：
+
+```sh
+tcodex login remote-account --device-auth
+```
+
+终端会显示授权网址和一次性代码；在任意浏览器打开网址并输入代码。授权完成后，账号仍由
+CodexSwitch 保存。该参数由项目的 `tcodex` shim 转给官方 `codex login --device-auth`；
+CodexSwitch 自身的 `login` 命令目前没有设备码选项，也不转发额外登录参数。默认的
+`tcodex login <name>` 浏览器回调流程保持不变。登录完成后用 `tcodex list` 确认账号，再用
+`tcodex use <name>` 激活。
 
 兼容入口 `tcodex cxs login <name>` 仍可使用。直接运行 `cxs login <name>` 是 CodexSwitch
 原生行为，不经过本机浏览器回调。`tcodex` 尊重 CodexSwitch 登录时传入的临时 `CODEX_HOME`，

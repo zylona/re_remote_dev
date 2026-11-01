@@ -41,6 +41,61 @@ run_codexswitch() {
   fi
 }
 
+run_codexswitch_login() {
+  login_name=""
+  login_mode="browser"
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --device-auth)
+        login_mode="device"
+        ;;
+      --)
+        shift
+        while [ "$#" -gt 0 ]; do
+          if [ -z "$login_name" ]; then
+            login_name="$1"
+          else
+            printf '%s\n' 'tcodex: 登录参数无效。' >&2
+            show_tcodex_help >&2
+            return 2
+          fi
+          shift
+        done
+        break
+        ;;
+      -* )
+        printf '%s\n' 'tcodex: 登录参数无效。' >&2
+        show_tcodex_help >&2
+        return 2
+        ;;
+      *)
+        if [ -z "$login_name" ]; then
+          login_name="$1"
+        else
+          printf '%s\n' 'tcodex: 登录参数无效。' >&2
+          show_tcodex_help >&2
+          return 2
+        fi
+        ;;
+    esac
+    shift
+  done
+  if [ -z "$login_name" ]; then
+    printf '%s\n' 'tcodex: 缺少账号名。' >&2
+    show_tcodex_help >&2
+    return 2
+  fi
+
+  export CODEX_SWITCH_CODEX_BIN="$tcodex_bin"
+  export REMOTE_DEV_CODEXSWITCH_CODEX_CHILD=1
+  if [ "$login_mode" = "device" ]; then
+    export REMOTE_DEV_CODEX_DEVICE_AUTH=1
+  else
+    unset REMOTE_DEV_CODEX_DEVICE_AUTH
+  fi
+  run_codexswitch login "$login_name"
+}
+
 restart_codex_daemon() {
   printf '%s\n' 'tcodex: 账号已切换，正在重启当前 CODEX_HOME 的 Codex daemon…' >&2
   if ! timeout 20 "$real" app-server daemon restart >/dev/null 2>&1; then
@@ -57,40 +112,68 @@ tcodex — Codex CLI 与 CodexSwitch 账号管理入口
 用法：
   tcodex                         启动官方 Codex CLI
   tcodex login <name>            登录并保存一个账号（支持本机浏览器回调）
+  tcodex login <name> --device-auth
+                                 使用设备码登录（在任意浏览器完成授权）
+                                 成功后自动保存并加入 list；已有活动账号时不会自动切换
   tcodex list                    列出已保存的账号
   tcodex use <name>              切换当前账号并重启当前 CODEX_HOME 的 Codex daemon
   tcodex import [name]           将当前 Codex 登录导入账号库
   tcodex remove <name>           从账号库删除指定账号
   tcodex help                    显示此帮助
 
-未列出的参数会传给官方 Codex CLI，例如：tcodex resume
-兼容旧入口：tcodex cxs login <name>
+只接受上面列出的命令；未知命令或参数会显示此帮助并返回错误。
+不带参数运行 tcodex 时启动官方 Codex CLI。
+兼容旧入口：tcodex cxs login <name> [--device-auth]
 
 注意：use 会重启当前 CODEX_HOME 的 daemon，可能中断该 daemon 管理的 Codex 会话。
+      login 成功后若要立即使用新账号，请运行：tcodex use <name>
 EOF
 }
 
 if [ "${REMOTE_DEV_CODEXSWITCH_CODEX_CHILD:-}" != 1 ]; then
   case "${1-}" in
+    "")
+      if [ "$#" -ne 0 ]; then
+        printf '%s\n' 'tcodex: 不接受空参数。' >&2
+        show_tcodex_help >&2
+        exit 2
+      fi
+      ;;
     help|-h|--help)
+      if [ "$#" -ne 1 ]; then
+        printf '%s\n' 'tcodex: help 不接受额外参数。' >&2
+        show_tcodex_help >&2
+        exit 2
+      fi
       show_tcodex_help
       exit 0
       ;;
     login)
       shift
-      export CODEX_SWITCH_CODEX_BIN="$tcodex_bin"
-      export REMOTE_DEV_CODEXSWITCH_CODEX_CHILD=1
-      run_codexswitch login "$@"
+      run_codexswitch_login "$@"
       exit $?
       ;;
     list|import|remove)
       command="$1"
       shift
+      case "$command:$#" in
+        list:0|import:0|import:1|remove:1) ;;
+        *)
+          printf 'tcodex: %s 的参数数量不正确。\n' "$command" >&2
+          show_tcodex_help >&2
+          exit 2
+          ;;
+      esac
       run_codexswitch "$command" "$@"
       exit $?
       ;;
     use)
       shift
+      if [ "$#" -ne 1 ]; then
+        printf '%s\n' 'tcodex: use 需要且只接受一个账号名。' >&2
+        show_tcodex_help >&2
+        exit 2
+      fi
       run_codexswitch use "$@"
       status=$?
       if [ "$status" -ne 0 ]; then
@@ -102,14 +185,18 @@ if [ "${REMOTE_DEV_CODEXSWITCH_CODEX_CHILD:-}" != 1 ]; then
     cxs)
       shift
       if [ "${1-}" != "login" ]; then
-        printf '%s\n' 'usage: tcodex login [account-name]' >&2
+        printf '%s\n' 'tcodex: cxs 只兼容 login 子命令。' >&2
+        show_tcodex_help >&2
         exit 2
       fi
       shift
-      export CODEX_SWITCH_CODEX_BIN="$tcodex_bin"
-      export REMOTE_DEV_CODEXSWITCH_CODEX_CHILD=1
-      run_codexswitch login "$@"
+      run_codexswitch_login "$@"
       exit $?
+      ;;
+    *)
+      printf 'tcodex: 未知命令或参数：%s\n' "$1" >&2
+      show_tcodex_help >&2
+      exit 2
       ;;
   esac
 fi
@@ -129,6 +216,13 @@ case "${1-}" in
     exec "$real" "$@"
     ;;
 esac
+# CodexSwitch's upstream login command currently invokes `codex login` without
+# forwarding options. For explicit device-code login, this marker is inherited
+# only by its nested tcodex process; dispatch the official CLI option there.
+if [ "${REMOTE_DEV_CODEX_DEVICE_AUTH:-}" = 1 ] && [ "${1-}" = "login" ]; then
+  shift
+  exec "$real" login --device-auth "$@"
+fi
 # `tssh` sessions carry the current short-lived nonce in the process
 # environment. Prefer it over the shared file: an interrupted SSH session can
 # leave a stale file behind, and sending that nonce makes the orchestrator
