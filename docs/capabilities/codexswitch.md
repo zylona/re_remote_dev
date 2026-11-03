@@ -35,8 +35,8 @@ CodexSwitch 自身的 `login` 命令目前没有设备码选项，也不转发�
 `tcodex login <name>` 浏览器回调流程保持不变。登录完成后用 `tcodex list` 确认账号，再用
 `tcodex use <name>` 激活。
 
-兼容入口 `tcodex cxs login <name>` 仍可使用。直接运行 `cxs login <name>` 是 CodexSwitch
-原生行为，不经过本机浏览器回调。`tcodex` 尊重 CodexSwitch 登录时传入的临时 `CODEX_HOME`，
+直接运行 `cxs login <name>` 是 CodexSwitch 原生行为，不经过本机浏览器回调。`tcodex`
+不提供 `cxs` 子命令入口；未知命令会显示帮助并退出。`tcodex` 尊重 CodexSwitch 登录时传入的临时 `CODEX_HOME`，
 不会把账号登录数据写入默认 `~/.codex/auth.json`。
 
 如果已有官方 Codex 登录状态需要保存到 CodexSwitch，运行 `tcodex import [name]`。
