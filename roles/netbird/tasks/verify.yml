@@ -1,0 +1,49 @@
+---
+- name: 只读检查 NetBird CLI
+  ansible.builtin.command:
+    argv: [netbird, version]
+  register: netbird_verify_version
+  changed_when: false
+  failed_when: false
+  become: true
+  become_user: root
+
+- name: 只读检查 systemd NetBird 服务
+  ansible.builtin.command:
+    argv: [systemctl, is-active, netbird.service]
+  register: netbird_verify_systemd
+  changed_when: false
+  failed_when: false
+  become: true
+  become_user: root
+  when: ansible_facts.service_mgr == 'systemd'
+
+- name: 只读检查 OpenRC NetBird 服务
+  ansible.builtin.command:
+    argv: [rc-service, netbird, status]
+  register: netbird_verify_openrc
+  changed_when: false
+  failed_when: false
+  become: true
+  become_user: root
+  when: ansible_facts.service_mgr == 'openrc'
+
+- name: 汇总 NetBird 服务状态
+  ansible.builtin.set_fact:
+    netbird_verify_service_ready: >-
+      {{ (netbird_verify_systemd.stdout | default('') | trim == 'active')
+         if ansible_facts.service_mgr == 'systemd'
+         else (netbird_verify_openrc.rc | default(1) | int == 0) }}
+
+- name: NetBird verify 状态断言
+  ansible.builtin.assert:
+    that:
+      - netbird_verify_version.rc == 0
+      - netbird_verify_service_ready | bool
+    fail_msg: >-
+      NetBird 未就绪：CLI={{ netbird_verify_version.rc == 0 }}，
+      service={{ netbird_verify_service_ready }}。请运行完整恢复流程并检查包源、代理和系统服务。
+
+- name: 输出 NetBird 验收状态
+  ansible.builtin.debug:
+    msg: "READY: NetBird CLI 已安装且客户端服务正在运行；尚未执行登录。"

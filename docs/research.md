@@ -2,6 +2,6 @@
 
 项目采用 **Ansible-first + 薄 CLI + 用户目录安装**：Ansible 负责远端执行、权限和幂等模板，CLI 只负责校验、交互读取凭据和调用固定 Playbook。
 
-默认组合为 zsh + Antidote + Powerlevel10k、mise（含 Node.js/npm/npx）、CodexSwitch、fzf/zoxide、Zellij（tmux fallback）、LazyVim 风格 Neovim 和全局 Codex Skills。CodexSwitch 在 Codex CLI 与 Node.js 恢复后安装。目标机没有外网时，控制端通过 SSH `-R` 将 HTTP 代理暴露到目标机 loopback；端口随机、失败清理，不写入长期 shell 配置。
+默认组合为 zsh + Antidote + Powerlevel10k、mise（含 Node.js/npm/npx）、CodexSwitch、NetBird 客户端、fzf/zoxide、Zellij（tmux fallback）、LazyVim 风格 Neovim 和全局 Codex Skills。CodexSwitch 在 Codex CLI 与 Node.js 恢复后安装。NetBird 使用发行版包管理器或固定版本官方二进制安装并启动客户端服务；全新安装在 `/var/lib/netbird/default.json` 预置自建管理端 `https://netbird.zylona.site:443`，已有客户端状态保持不变，恢复本身不登录、不执行 `netbird up`。目标机没有外网时，控制端通过 SSH `-R` 将 HTTP 代理暴露到目标机 loopback；端口随机、失败清理，不写入长期 shell 配置。
 
 详细选型比较、跨发行版调研、代理方案和历史验证记录保留在 `dev` 分支。

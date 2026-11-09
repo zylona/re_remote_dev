@@ -1,0 +1,17 @@
+---
+netbird_version: "0.82.0"
+netbird_management_url: "https://netbird.zylona.site:443"
+netbird_release_arch: >-
+  {{ {'x86_64': 'amd64', 'amd64': 'amd64', 'aarch64': 'arm64', 'arm64': 'arm64',
+      'i386': '386', 'i686': '386'}.get(ansible_facts.architecture, '') }}
+netbird_release_sha256:
+  amd64: b569f65de303d21317bc716f3116002e2cf175ae22a9f6d2bed91200a2f5000b
+  arm64: c2e5ccb5824cb29fe008a5a54854fd5926b89d3aaff7ab8721f77abf8e8b3e62
+  "386": 71d0baa03b97a35cd2cc4fc58b4f0fe7c02aac0821cc7e5154979b0cd1079ce4
+netbird_download_dir: /var/cache/remote-dev/netbird
+netbird_offline: "{{ tools_offline | default(false) | bool }}"
+netbird_proxy_environment:
+  http_proxy: "{{ remote_dev_temp_proxy_url | default(omit) }}"
+  https_proxy: "{{ remote_dev_temp_proxy_url | default(omit) }}"
+  HTTP_PROXY: "{{ remote_dev_temp_proxy_url | default(omit) }}"
+  HTTPS_PROXY: "{{ remote_dev_temp_proxy_url | default(omit) }}"

@@ -1,0 +1,350 @@
+---
+- name: 校验 NetBird 安装平台
+  ansible.builtin.assert:
+    that:
+      - ansible_facts.system == 'Linux'
+      - ansible_facts.pkg_mgr in ['apt', 'dnf', 'yum', 'zypper', 'apk', 'pacman']
+    fail_msg: >-
+      NetBird 自动安装仅支持 Linux 的 apt、dnf/yum、zypper、apk 和 pacman 平台；
+      当前系统为 {{ ansible_facts.distribution }} / {{ ansible_facts.pkg_mgr | default('unknown') }}。
+
+- name: 校验目标服务管理器
+  ansible.builtin.assert:
+    that:
+      - ansible_facts.service_mgr == 'systemd' or
+        (ansible_facts.service_mgr == 'openrc' and ansible_facts.pkg_mgr == 'apk')
+    fail_msg: >-
+      NetBird 服务管理支持 systemd，或 Alpine 的 OpenRC；当前为
+      {{ ansible_facts.pkg_mgr | default('unknown') }} / {{ ansible_facts.service_mgr | default('unknown') }}。
+
+- name: 校验 NetBird 管理端地址
+  ansible.builtin.assert:
+    that:
+      - netbird_management_url is match('^https://[^/]+(:[0-9]+)?/?$')
+    fail_msg: "netbird_management_url 必须是 HTTPS 管理端地址，例如 https://netbird.example.com:443。"
+
+- name: 检查 NetBird CLI 是否已存在
+  ansible.builtin.command:
+    argv: [sh, -c, command -v netbird]
+  register: netbird_existing_cli
+  changed_when: false
+  failed_when: false
+
+- name: 检查 NetBird 初始 profile 是否已存在
+  ansible.builtin.stat:
+    path: /var/lib/netbird/default.json
+  register: netbird_default_profile
+
+- name: 检查 NetBird active profile 是否已存在
+  ansible.builtin.stat:
+    path: /var/lib/netbird/active_profile.json
+  register: netbird_active_profile
+
+- name: 检查 NetBird 旧版配置是否已存在
+  ansible.builtin.stat:
+    path: /etc/netbird/config.json
+  register: netbird_legacy_config
+
+- name: 为全新安装创建 NetBird 状态目录
+  ansible.builtin.file:
+    path: /var/lib/netbird
+    state: directory
+    owner: root
+    group: root
+    mode: '0700'
+  when:
+    - netbird_existing_cli.rc != 0
+    - not netbird_default_profile.stat.exists
+    - not netbird_active_profile.stat.exists
+    - not netbird_legacy_config.stat.exists
+    - not (netbird_offline | bool)
+
+- name: 为全新安装预置自建 NetBird 管理端
+  ansible.builtin.copy:
+    content: >-
+      {{ {'ManagementURL': {'Scheme': 'https',
+                            'Host': (netbird_management_url | regex_replace('^https://', '') | regex_replace('/$', ''))}} | to_nice_json }}
+    dest: /var/lib/netbird/default.json
+    owner: root
+    group: root
+    mode: '0600'
+    validate: 'python3 -m json.tool %s'
+  when:
+    - netbird_existing_cli.rc != 0
+    - not netbird_default_profile.stat.exists
+    - not netbird_active_profile.stat.exists
+    - not netbird_legacy_config.stat.exists
+    - not (netbird_offline | bool)
+
+- name: 离线模式检查现有 NetBird CLI
+  ansible.builtin.set_fact:
+    netbird_offline_probe:
+      rc: "{{ netbird_existing_cli.rc }}"
+  when: netbird_offline | bool
+
+- name: 离线模式缺少 NetBird 时停止
+  ansible.builtin.assert:
+    that: netbird_offline_probe.rc == 0
+    fail_msg: "离线模式下目标机未安装 NetBird；请联网运行恢复，或预先安装 NetBird 客户端。"
+  when: netbird_offline | bool
+
+- name: Debian 系配置 NetBird APT 签名密钥目录
+  ansible.builtin.file:
+    path: /etc/apt/keyrings
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+  when:
+    - ansible_facts.pkg_mgr == 'apt'
+    - not (netbird_offline | bool)
+
+- name: Debian 系下载 NetBird APT 签名密钥
+  ansible.builtin.get_url:
+    url: https://pkgs.netbird.io/debian/public.key
+    dest: /etc/apt/keyrings/netbird.asc
+    owner: root
+    group: root
+    mode: '0644'
+    force: false
+  register: netbird_apt_key
+  when:
+    - ansible_facts.pkg_mgr == 'apt'
+    - not (netbird_offline | bool)
+  environment: "{{ netbird_proxy_environment }}"
+
+- name: Debian 系配置 NetBird APT 仓库
+  ansible.builtin.copy:
+    content: "deb [signed-by=/etc/apt/keyrings/netbird.asc] https://pkgs.netbird.io/debian stable main\n"
+    dest: /etc/apt/sources.list.d/netbird.list
+    owner: root
+    group: root
+    mode: '0644'
+  register: netbird_apt_repo
+  when:
+    - ansible_facts.pkg_mgr == 'apt'
+    - not (netbird_offline | bool)
+
+- name: Debian 系检查 NetBird APT 候选版本
+  ansible.builtin.command:
+    argv: [apt-cache, policy, netbird]
+  register: netbird_apt_candidate
+  changed_when: false
+  failed_when: false
+  when:
+    - ansible_facts.pkg_mgr == 'apt'
+    - not (netbird_offline | bool)
+
+- name: Debian 系刷新 APT 索引
+  ansible.builtin.apt:
+    update_cache: true
+  when:
+    - ansible_facts.pkg_mgr == 'apt'
+    - not (netbird_offline | bool)
+    - >-
+      netbird_apt_key.changed or netbird_apt_repo.changed or
+      'Candidate: (none)' in (netbird_apt_candidate.stdout | default(''))
+  environment: "{{ netbird_proxy_environment }}"
+
+- name: RPM 系配置 NetBird 签名仓库
+  ansible.builtin.copy:
+    content: |
+      [netbird]
+      name=NetBird
+      baseurl=https://pkgs.netbird.io/yum/
+      enabled=1
+      gpgcheck=1
+      gpgkey=https://pkgs.netbird.io/yum/repodata/repomd.xml.key
+      repo_gpgcheck=1
+      {% if ansible_facts.pkg_mgr == 'zypper' %}
+      type=rpm-md
+      autorefresh=1
+      {% endif %}
+    dest: "{{ '/etc/zypp/repos.d/netbird.repo' if ansible_facts.pkg_mgr == 'zypper' else '/etc/yum.repos.d/netbird.repo' }}"
+    owner: root
+    group: root
+    mode: '0644'
+  when:
+    - ansible_facts.pkg_mgr in ['dnf', 'yum', 'zypper']
+    - not (netbird_offline | bool)
+  register: netbird_rpm_repo
+
+- name: 刷新 openSUSE NetBird 仓库元数据
+  ansible.builtin.command:
+    argv: [zypper, --non-interactive, --gpg-auto-import-keys, refresh, netbird]
+  register: netbird_zypper_refresh
+  changed_when: netbird_zypper_refresh.rc == 0
+  when:
+    - ansible_facts.pkg_mgr == 'zypper'
+    - not (netbird_offline | bool)
+    - netbird_rpm_repo.changed
+  environment: "{{ netbird_proxy_environment }}"
+
+- name: 通过原生包管理器安装 NetBird
+  ansible.builtin.package:
+    name: netbird
+    state: present
+  when:
+    - ansible_facts.pkg_mgr in ['apt', 'dnf', 'yum', 'zypper']
+    - not (netbird_offline | bool)
+  environment: "{{ netbird_proxy_environment }}"
+
+- name: Alpine 检查 NetBird 客户端包
+  ansible.builtin.command:
+    argv: [apk, info, -e, netbird]
+  register: netbird_apk_client_probe
+  changed_when: false
+  failed_when: false
+  when:
+    - ansible_facts.pkg_mgr == 'apk'
+    - not (netbird_offline | bool)
+
+- name: Alpine 检查 NetBird OpenRC 包
+  ansible.builtin.command:
+    argv: [apk, info, -e, netbird-openrc]
+  register: netbird_apk_openrc_probe
+  changed_when: false
+  failed_when: false
+  when:
+    - ansible_facts.pkg_mgr == 'apk'
+    - not (netbird_offline | bool)
+
+- name: Alpine 刷新包索引（缺少 NetBird 包时）
+  ansible.builtin.command:
+    argv: [apk, update]
+  register: netbird_apk_index_update
+  changed_when: netbird_apk_index_update.rc == 0
+  when:
+    - ansible_facts.pkg_mgr == 'apk'
+    - not (netbird_offline | bool)
+    - netbird_apk_client_probe.rc != 0 or netbird_apk_openrc_probe.rc != 0
+  environment: "{{ netbird_proxy_environment }}"
+
+- name: Alpine 安装 NetBird 与 OpenRC 集成
+  ansible.builtin.package:
+    name:
+      - netbird
+      - netbird-openrc
+    state: present
+  when:
+    - ansible_facts.pkg_mgr == 'apk'
+    - not (netbird_offline | bool)
+  environment: "{{ netbird_proxy_environment }}"
+
+- name: 创建官方 NetBird 二进制缓存目录
+  ansible.builtin.file:
+    path: "{{ netbird_download_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+  when:
+    - ansible_facts.pkg_mgr == 'pacman'
+    - not (netbird_offline | bool)
+
+- name: 校验 pacman 系官方二进制架构
+  ansible.builtin.assert:
+    that: netbird_release_arch in netbird_release_sha256
+    fail_msg: >-
+      NetBird 固定版本 {{ netbird_version }} 尚未提供 {{ ansible_facts.architecture }} 的校验清单；
+      当前二进制安装支持 x86_64、aarch64 和 32 位 x86。
+  when: ansible_facts.pkg_mgr == 'pacman'
+
+- name: 下载校验固定版本的 NetBird 官方二进制
+  ansible.builtin.get_url:
+    url: "https://github.com/netbirdio/netbird/releases/download/v{{ netbird_version }}/netbird_{{ netbird_version }}_linux_{{ netbird_release_arch }}.tar.gz"
+    dest: "{{ netbird_download_dir }}/netbird_{{ netbird_version }}_linux_{{ netbird_release_arch }}.tar.gz"
+    checksum: "sha256:{{ netbird_release_sha256[netbird_release_arch] }}"
+    owner: root
+    group: root
+    mode: '0644'
+  when:
+    - ansible_facts.pkg_mgr == 'pacman'
+    - not (netbird_offline | bool)
+  environment: "{{ netbird_proxy_environment }}"
+
+- name: 创建 NetBird 二进制解包目录
+  ansible.builtin.file:
+    path: "{{ netbird_download_dir }}/unpacked-{{ netbird_version }}"
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+  when:
+    - ansible_facts.pkg_mgr == 'pacman'
+    - not (netbird_offline | bool)
+
+- name: 解包 NetBird 官方二进制
+  ansible.builtin.unarchive:
+    src: "{{ netbird_download_dir }}/netbird_{{ netbird_version }}_linux_{{ netbird_release_arch }}.tar.gz"
+    dest: "{{ netbird_download_dir }}/unpacked-{{ netbird_version }}"
+    remote_src: true
+    creates: "{{ netbird_download_dir }}/unpacked-{{ netbird_version }}/netbird"
+  when:
+    - ansible_facts.pkg_mgr == 'pacman'
+    - not (netbird_offline | bool)
+
+- name: 安装 NetBird 官方二进制
+  ansible.builtin.copy:
+    src: "{{ netbird_download_dir }}/unpacked-{{ netbird_version }}/netbird"
+    dest: /usr/local/bin/netbird
+    remote_src: true
+    owner: root
+    group: root
+    mode: '0755'
+  when:
+    - ansible_facts.pkg_mgr == 'pacman'
+    - not (netbird_offline | bool)
+
+- name: pacman 系检查 NetBird systemd 单元
+  ansible.builtin.command:
+    argv: [systemctl, show, netbird.service, --property=LoadState, --value]
+  register: netbird_unit_state
+  changed_when: false
+  failed_when: false
+  when:
+    - ansible_facts.pkg_mgr == 'pacman'
+    - ansible_facts.service_mgr == 'systemd'
+
+- name: pacman 系安装官方 NetBird systemd 单元
+  ansible.builtin.command:
+    argv: [netbird, service, install]
+  register: netbird_service_install
+  changed_when: netbird_service_install.rc == 0
+  when:
+    - ansible_facts.pkg_mgr == 'pacman'
+    - ansible_facts.service_mgr == 'systemd'
+    - netbird_unit_state.stdout | default('') | trim != 'loaded'
+
+- name: systemd 启动 NetBird 客户端服务
+  ansible.builtin.systemd_service:
+    name: netbird.service
+    state: started
+    daemon_reload: "{{ netbird_service_install.changed | default(false) }}"
+  when: ansible_facts.service_mgr == 'systemd'
+
+- name: Alpine 检查 NetBird OpenRC 服务状态
+  ansible.builtin.command:
+    argv: [rc-service, netbird, status]
+  register: netbird_openrc_status
+  changed_when: false
+  failed_when: false
+  when:
+    - ansible_facts.pkg_mgr == 'apk'
+    - ansible_facts.service_mgr == 'openrc'
+
+- name: Alpine 启动 NetBird OpenRC 服务
+  ansible.builtin.command:
+    argv: [rc-service, netbird, start]
+  register: netbird_openrc_start
+  changed_when: netbird_openrc_start.rc == 0
+  when:
+    - ansible_facts.pkg_mgr == 'apk'
+    - ansible_facts.service_mgr == 'openrc'
+    - netbird_openrc_status.rc != 0
+
+- name: 提示 NetBird 等待用户后续登录
+  ansible.builtin.debug:
+    msg: >-
+      NetBird 客户端服务已启动；新安装默认使用 {{ netbird_management_url }}，
+      恢复流程未执行登录或改写已有认证状态。需要加入网络时，请在目标机手动提供对应控制面的 setup key。

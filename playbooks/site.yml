@@ -11,6 +11,8 @@
   import_playbook: plays/20_user_shell.yml
 - name: P4 工具与工作区前置验证
   import_playbook: plays/30_tools.yml
+- name: P4 NetBird 客户端
+  import_playbook: plays/35_netbird.yml
 - name: P5 Codex CLI 恢复
   import_playbook: plays/40_codex.yml
 - name: P9 Neovim IDE

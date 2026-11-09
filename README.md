@@ -5,7 +5,7 @@
 [![License](https://img.shields.io/github/license/zylona/re_remote_dev)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Linux-333?logo=linux)](#支持范围)
 
-用一次受控运行，把一台可 SSH 登录的 Linux 主机恢复成现代远程开发环境：zsh、Antidote、Powerlevel10k、mise（含 Node.js/npm/npx）、fzf、zoxide、Zellij、eza、btop、gpustat、Neovim、Codex CLI 和 CodexSwitch。项目采用 Ansible-first 设计，支持无外网目标机的临时 HTTP 代理，并保持普通 `ssh user@host` 的原生连接体验。
+用一次受控运行，把一台可 SSH 登录的 Linux 主机恢复成现代远程开发环境：zsh、Antidote、Powerlevel10k、mise（含 Node.js/npm/npx）、NetBird 客户端、fzf、zoxide、Zellij、eza、btop、gpustat、Neovim、Codex CLI 和 CodexSwitch。项目采用 Ansible-first 设计，支持无外网目标机的临时 HTTP 代理，并保持普通 `ssh user@host` 的原生连接体验。
 
 > 当前发布版本：`v0.1.27`。已在 Debian 13、Arch/Omarchy 和 openEuler 24.03 上完成真实回归，包含多窗口、多用户共享隧道、断线恢复和 30 分钟连续观察。默认不安装远端常驻 Agent、不开放公网端口、不保存密码或 API Token。
 
@@ -18,9 +18,12 @@
 - **多窗口稳定性**：Zellij 默认，tmux fallback；持久 ControlMaster 专用于代理/事件转发，普通 SSH 窗口使用独立连接，避免 Codex 流量拖慢终端输入。
 - **受控代理**：把控制端 `127.0.0.1:4227` 临时转发到目标机 loopback，失败和退出自动清理。
 - **多 Codex 账号**：Codex 与 mise 管理的 Node.js 就绪后，恢复固定版本的 CodexSwitch；账号数据按目标用户隔离，不复制本机桌面账号。
+- **NetBird 客户端**：按 Linux 发行版安装 CLI 并启动系统服务；全新安装默认指向 `https://netbird.zylona.site:443`，不会自动登录或加入网络。
 - **Codex Skills**：恢复时通过 mise 的 Node.js/npm/npx 安装 Nature 学术工具 Skills 和 literature-review-skills，并在 verify 中只读检查完整性。
 - **可验证、可重跑**：固定 Play 顺序、独立只读 verify、第二次 apply 幂等检查。
 - **可发布制品**：完整本地集成包可作为 GitHub Release tarball 独立安装和升级。
+
+NetBird 的发行版、服务管理、认证边界和离线行为见[客户端恢复说明](docs/capabilities/netbird.md)。
 
 ## 工作方式
 
@@ -349,6 +352,7 @@ uv sync --locked
 - [发布与安装](docs/release.md)
 - [发布验收清单](docs/release-checklist.md)
 - [能力契约：连接、Neovim、编排器](docs/capabilities/)
+- [NetBird 纯命令行 setup key 加入教程](docs/guides/netbird-setup-key.md)
 
 贡献流程和安全问题处理见 [CONTRIBUTING.md](CONTRIBUTING.md) 与 [SECURITY.md](SECURITY.md)。
 
