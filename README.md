@@ -256,14 +256,14 @@ lease_ttl = 3
 `lease_ttl` 必须大于两个 heartbeat 间隔；无效值会回退到默认值。该配置只包含时序参数，
 不保存密码、私钥或代理凭据。
 
-也可以从 [v0.1.27 Release](https://github.com/zylona/re_remote_dev/releases/tag/v0.1.27) 下载完整本地集成制品。生产环境建议固定版本并校验 SHA256：
+也可以从 [v0.1.32 Release](https://github.com/zylona/re_remote_dev/releases/tag/v0.1.32) 下载完整本地集成制品。生产环境建议固定版本并校验 SHA256：
 
 ```bash
-curl -fLO https://github.com/zylona/re_remote_dev/releases/download/v0.1.27/remote-dev-orchestrator-v0.1.27-linux.tar.gz
-curl -fLO https://github.com/zylona/re_remote_dev/releases/download/v0.1.27/remote-dev-orchestrator-v0.1.27-linux.tar.gz.sha256
-sha256sum -c remote-dev-orchestrator-v0.1.20-linux.tar.gz.sha256
-tar -xzf remote-dev-orchestrator-v0.1.27-linux.tar.gz
-./remote-dev-orchestrator-v0.1.27-linux/install
+curl -fLO https://github.com/zylona/re_remote_dev/releases/download/v0.1.32/remote-dev-orchestrator-v0.1.32-linux.tar.gz
+curl -fLO https://github.com/zylona/re_remote_dev/releases/download/v0.1.32/remote-dev-orchestrator-v0.1.32-linux.tar.gz.sha256
+sha256sum -c remote-dev-orchestrator-v0.1.32-linux.tar.gz.sha256
+tar -xzf remote-dev-orchestrator-v0.1.32-linux.tar.gz
+./remote-dev-orchestrator-v0.1.32-linux/install
 ```
 
 安装器会迁移并备份旧版 `# >>> remote-dev ssh integration >>>` 标记区块，但默认不再写入全局

@@ -222,7 +222,7 @@ def test_degraded_endpoint_retries_with_bounded_backoff(tmp_path):
     record = server.endpoints[first["endpoint_digest"]]
     assert record["last_error"] == "REMOTE_UNREACHABLE"
     record["next_retry"] = 0
-    server.handle({"op": "status"})
+    server._reconcile_endpoints()
     assert server.endpoints[first["endpoint_digest"]]["state"] == "READY"
     assert server.endpoints[first["endpoint_digest"]]["failure_count"] == 0
     listener.close()
@@ -248,7 +248,26 @@ def test_heartbeat_refreshes_lease_and_ttl_releases_orphan():
     heartbeat = server.handle({"op": "heartbeat", "endpoint": endpoint, "session_id": "live"})
     assert heartbeat == {"ok": True, "endpoint_digest": acquired["endpoint_digest"], "session_count": 1}
     time.sleep(0.02)
+    server._expire_sessions()
     assert server.handle({"op": "status"})["endpoints"] == []
+    listener.close()
+
+
+def test_heartbeat_is_not_preceded_by_slow_maintenance(monkeypatch):
+    listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    server = OrchestratorServer(listener, None)
+    endpoint = {"hostname": "host", "port": 22}
+    acquired = server.handle({
+        "op": "acquire", "endpoint": endpoint,
+        "candidate": {"user": "u"}, "session_id": "live",
+    })
+    assert acquired["ok"]
+    calls = []
+    monkeypatch.setattr(server, "_expire_sessions", lambda: calls.append("expire"))
+    monkeypatch.setattr(server, "_reconcile_endpoints", lambda: calls.append("reconcile"))
+    response = server.handle({"op": "heartbeat", "endpoint": endpoint, "session_id": "live"})
+    assert response["ok"]
+    assert calls == []
     listener.close()
 
 
@@ -297,6 +316,56 @@ def test_server_register_status_and_shutdown():
             os.unlink(path)
         except (FileNotFoundError, OSError):
             pass
+
+
+def test_queued_heartbeat_survives_slow_endpoint_start(tmp_path):
+    class SlowForwarder:
+        def __init__(self):
+            self.started = threading.Event()
+
+        def start(self, endpoint, user, identity, **kwargs):
+            self.started.set()
+            time.sleep(0.15)
+
+        def stop(self, endpoint, user=None):
+            pass
+
+    path = str(tmp_path / "heartbeat.sock")
+    listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    listener.bind(path)
+    listener.listen(8)
+    forwarder = SlowForwarder()
+    server = OrchestratorServer(listener, None, endpoint_forwarder=forwarder)
+    server.lease_ttl = 0.04
+    thread = threading.Thread(target=server.serve, daemon=True)
+    thread.start()
+
+    def request(payload):
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+            client.settimeout(2)
+            client.connect(path)
+            client.sendall((json.dumps(payload) + "\n").encode())
+            return json.loads(client.recv(4096))
+
+    endpoint = {"hostname": "host", "port": 22}
+    acquired = {}
+    acquire_thread = threading.Thread(target=lambda: acquired.update(request({
+        "op": "acquire", "endpoint": endpoint,
+        "candidate": {"user": "u", "identity_file": str(tmp_path / "id")},
+        "session_id": "live",
+    })))
+    acquire_thread.start()
+    assert forwarder.started.wait(timeout=1)
+    # Queue a heartbeat while the serialized SSH/systemd start is in flight.
+    # It must be processed before idle maintenance expires the 40ms lease.
+    heartbeat = request({"op": "heartbeat", "endpoint": endpoint, "session_id": "live"})
+    acquire_thread.join(timeout=2)
+    assert acquired.get("ok") is True
+    assert heartbeat.get("ok") is True
+    assert "live" in server.sessions
+    request({"op": "shutdown"})
+    thread.join(timeout=2)
+    assert not thread.is_alive()
 
 
 def test_server_accepts_codex_lifecycle_events():

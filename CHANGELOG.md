@@ -1,17 +1,19 @@
 # Changelog
 
-## Unreleased
+## [0.1.32]
 
 - 恢复流程新增跨发行版 NetBird CLI 安装与服务启动；不执行登录或 `netbird up`，并提供独立只读 verify。
 - 全新 NetBird 安装在首次启动前预置 `https://netbird.zylona.site:443`；已有客户端、profile 和旧配置保持不变。
 - 覆盖 apt、dnf/yum、zypper、apk、pacman；pacman 使用固定官方二进制并校验 SHA256。
 - 新增纯命令行 NetBird setup key 加入教程，说明长期 peer、开机重连、分组策略和 key 生命周期。
 - 恢复流程改为安装固定版本 CodexSwitch（依赖官方 Codex CLI 和 mise Node.js），并从默认 apply/verify 中移除 CC Switch CLI。
-- 新增统一账号入口 `tcodex login/list/use/import/remove`，命令仍由官方 CodexSwitch 执行。
-- 新增 `tcodex help` 命令，显示账号管理和官方 Codex 参数入口用法。
+- 新增统一账号入口 `tcodex login/list/use/import/remove`，命令仍由官方 CodexSwitch 执行；`tcodex help` 展示支持的命令和用法。
+- `tcodex login <name> --device-auth` 支持设备码登录。
 - `tcodex use <name>` 切换成功后自动重启当前用户当前 `CODEX_HOME` 的 Codex daemon；失败切换不会重启。
-- 保留 `tcodex cxs login <name>` 作为兼容入口，并维持登录回调到本机浏览器的流程。
+- tcodex 只接受明确支持的子命令；未知命令显示帮助，不会误启动 Codex 会话。
 - 修复 `tcodex` 在 `tssh` 交互式会话中无法读取短生命周期 `RDO_NONCE`，导致 OAuth 事件未发送、本地浏览器无法自动打开的问题。
+- 修复慢速 SSH 隧道探测期间 heartbeat 排队导致活动会话租约过期、4227/4228 隧道反复启停的问题。
+- 修复远端 4227 探测脚本未正确引用、导致远端 shell 错误解析的问题。
 
 ## [0.1.31]
 

@@ -40,7 +40,10 @@ def probe_remote_proxy(target: TargetKey, identity: Path, *, timeout: float = 8.
         "-o", "ConnectionAttempts=1", "-o", "ServerAliveInterval=3",
         "-o", "ServerAliveCountMax=1", "-i", str(identity.expanduser()),
         "-p", str(target.port), f"{target.user}@{target.hostname}",
-        "sh", "-c", remote_probe,
+        # OpenSSH concatenates remote command arguments before passing them to
+        # the remote shell. Quote the script as one argument to `sh -c`; an
+        # unquoted `if`/`;` sequence is otherwise parsed by the login shell.
+        f"sh -c {shlex.quote(remote_probe)}",
     ]
     try:
         result = subprocess.run(command, check=False, capture_output=True, text=True, timeout=timeout)

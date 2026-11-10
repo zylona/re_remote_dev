@@ -296,7 +296,7 @@
     - ansible_facts.pkg_mgr == 'pacman'
     - not (netbird_offline | bool)
 
-- name: pacman 系检查 NetBird systemd 单元
+- name: Pacman 系检查 NetBird systemd 单元
   ansible.builtin.command:
     argv: [systemctl, show, netbird.service, --property=LoadState, --value]
   register: netbird_unit_state
@@ -306,7 +306,7 @@
     - ansible_facts.pkg_mgr == 'pacman'
     - ansible_facts.service_mgr == 'systemd'
 
-- name: pacman 系安装官方 NetBird systemd 单元
+- name: Pacman 系安装官方 NetBird systemd 单元
   ansible.builtin.command:
     argv: [netbird, service, install]
   register: netbird_service_install
@@ -316,7 +316,7 @@
     - ansible_facts.service_mgr == 'systemd'
     - netbird_unit_state.stdout | default('') | trim != 'loaded'
 
-- name: systemd 启动 NetBird 客户端服务
+- name: Systemd 启动 NetBird 客户端服务
   ansible.builtin.systemd_service:
     name: netbird.service
     state: started

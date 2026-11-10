@@ -1,4 +1,5 @@
 from pathlib import Path
+import shlex
 
 from remote_dev.orchestrator.model import TargetKey
 from remote_dev.orchestrator import proxy_persistent
@@ -40,6 +41,28 @@ def test_probe_does_not_auto_kill_unknown_listener(monkeypatch):
     monkeypatch.setattr(proxy_persistent.subprocess, "run", lambda *args, **kwargs: (calls.append(args[0]) or Result()))
     proxy_persistent.probe_remote_proxy(TargetKey("host", 22, "user"), Path("/tmp/id"))
     assert not any("kill" in str(call) or "pkill" in str(call) for call in calls)
+
+
+def test_probe_quotes_remote_script_as_one_sh_argument(monkeypatch):
+    captured = {}
+
+    class Result:
+        returncode = 0
+        stdout = "FREE\n"
+        stderr = ""
+
+    def run(command, **kwargs):
+        captured["command"] = command
+        return Result()
+
+    monkeypatch.setattr(proxy_persistent.subprocess, "run", run)
+    result = proxy_persistent.probe_remote_proxy(TargetKey("host", 22, "user"), Path("/tmp/id"))
+    assert result.state == "free"
+    remote_command = captured["command"][-1]
+    parts = shlex.split(remote_command)
+    assert parts[:2] == ["sh", "-c"]
+    assert len(parts) == 3
+    assert parts[2].startswith("if ! command -v curl")
 
 
 def test_endpoint_manager_reuses_healthy_external_proxy(monkeypatch):

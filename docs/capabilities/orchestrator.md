@@ -119,6 +119,10 @@ lease 记录 endpoint、候选用户、密钥指纹和最后 heartbeat，不记�
 的最后一个 lease 释放时，才允许停止该 endpoint 的 4227 forwarder；其他用户仍在线时不会
 误删共享隧道。
 
+服务优先处理已到达的 heartbeat，再于空闲轮询中运行过期回收和 forwarder reconcile。
+SSH 探测或 systemd 操作即使因 relay 路径较慢而阻塞，也不能抢在已经排队的 heartbeat
+前清理租约。远端 4227 探测命令必须整体 shell-quote 后交给 `sh -c`。
+
 ## P4 OAuth callback 转发
 
 `OAuthManager` 使用独立 SSH `-N -L` 进程临时添加

@@ -114,7 +114,7 @@ def test_codex_role_deploys_non_blocking_lifecycle_shim() -> None:
     assert 'app-server daemon restart' in shim
 
 
-def test_tcodex_supports_codexswitch_isolated_login_home(tmp_path: Path) -> None:
+def test_tcodex_login_and_rejects_removed_cxs_alias(tmp_path: Path) -> None:
     template = (ROOT / "roles/codex/templates/codex-shim.sh.j2").read_text(encoding="utf-8")
     home = tmp_path / "home"
     codex_home = home / ".codex"
@@ -163,7 +163,7 @@ def test_tcodex_supports_codexswitch_isolated_login_home(tmp_path: Path) -> None
     import subprocess
 
     env = {**os.environ, "HOME": str(home), "CODEX_HOME": str(tmp_path / "codexswitch-login-tmp")}
-    version = subprocess.run([str(shim), "--version"], env=env, text=True, capture_output=True, check=False)
+    help_result = subprocess.run([str(shim), "help"], env=env, text=True, capture_output=True, check=False)
     login = subprocess.run(
         [str(shim), "login"],
         env={**env, "REMOTE_DEV_CODEXSWITCH_CODEX_CHILD": "1"},
@@ -171,17 +171,19 @@ def test_tcodex_supports_codexswitch_isolated_login_home(tmp_path: Path) -> None
         capture_output=True,
         check=False,
     )
-    switched_login = subprocess.run(
+    removed_alias = subprocess.run(
         [str(shim), "cxs", "login", "work"], env=env, text=True, capture_output=True, check=False
     )
 
-    assert version.returncode == 0 and "codex fake" in version.stdout
+    assert help_result.returncode == 0 and "tcodex login <name>" in help_result.stdout
     assert login.returncode == 0
     assert (tmp_path / "codexswitch-login-tmp/auth.json").is_file()
     assert "临时 CODEX_HOME 登录完成；跳过 daemon 重启。" in login.stderr
     assert not (home / "codex.log").exists()
-    assert switched_login.returncode == 0
-    assert (home / "codexswitch.log").read_text(encoding="utf-8").strip() == f"{shim}|login work"
+    assert removed_alias.returncode == 2
+    assert "未知命令或参数：cxs" in removed_alias.stderr
+    assert "tcodex help" in removed_alias.stderr
+    assert not (home / "codexswitch.log").exists()
 
 
 def test_tcodex_account_commands_restart_daemon_only_after_successful_use(tmp_path: Path) -> None:

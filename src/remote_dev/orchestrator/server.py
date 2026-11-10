@@ -83,8 +83,10 @@ class OrchestratorServer:
         )
 
     def handle(self, payload: dict[str, Any]) -> dict[str, Any]:
-        self._expire_sessions()
-        self._reconcile_endpoints()
+        # Maintenance stays out of request handling.  SSH probing and
+        # systemd reconciliation are synchronous and may take longer than a
+        # lease TTL on relay paths; doing that work before *any* request could
+        # expire a heartbeat already waiting in the accept queue.
         if "event" in payload:
             return self.handle_event(payload)
         op = payload.get("op")
@@ -233,6 +235,7 @@ class OrchestratorServer:
                             self.endpoint_forwarder.start(endpoint, previous["user"], Path(identity_file).expanduser(), event_forward=True)
                             record["event_required"] = True
                             record["forwards"] = self._forward_rows(record["state"], record.get("last_error"), event_forward=True)
+                    previous["last_seen"] = time.monotonic()
                     return {"ok": True, "endpoint_digest": digest, "state": record["state"], "owner": record["owner"], "session_count": record["session_count"], "reused": True}
                 event_required = bool(payload.get("event_forward", True))
                 record = self.endpoints.setdefault(
@@ -311,6 +314,11 @@ class OrchestratorServer:
                         record["forwards"] = self._forward_rows("READY", event_forward=event_required)
                     except (OSError, RuntimeError, ValueError, subprocess.SubprocessError) as exc:
                         self._mark_forward_failure(record, exc)
+                # Initial tunnel setup may itself consume most of the TTL.
+                # Start the lease clock once acquire has finished so the
+                # client's first scheduled heartbeat has time to reach the
+                # broker.
+                session["last_seen"] = time.monotonic()
                 return {"ok": True, "endpoint_digest": digest, "state": record["state"], "owner": record["owner"], "session_count": record["session_count"], "reused": record["session_count"] > 1}
             previous = self.sessions.get(session_id)
             if previous is None:
@@ -588,10 +596,15 @@ class OrchestratorServer:
             listener.setblocking(False)
             selector.register(listener, selectors.EVENT_READ)
         while self.running:
-            # Expire abandoned leases even when no client is polling status.
-            self._expire_sessions()
-            self._reconcile_endpoints()
-            for key, _ in selector.select(timeout=0.5):
+            events = selector.select(timeout=0.5)
+            if not events:
+                # SSH/systemd maintenance is only run when no request is
+                # ready. A slow relay/reconcile can delay accept, but queued
+                # heartbeats are drained before the next expiry decision.
+                self._expire_sessions()
+                self._reconcile_endpoints()
+                continue
+            for key, _ in events:
                 try:
                     conn, _ = key.fileobj.accept()
                 except OSError:
