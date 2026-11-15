@@ -33,6 +33,7 @@ def test_tssh_help_and_list_commands(monkeypatch, capsys):
     output = capsys.readouterr().out
     assert "persist" in output
     assert "put [-r] SOURCE... user@host" in output
+    assert "tssh reclaim user@host" in output
     monkeypatch.setattr(tssh, "_request", lambda payload, timeout: {"ok": True, "endpoints": []})
     assert tssh.main(["list"]) == 0
     assert "no active" in capsys.readouterr().out

@@ -18,6 +18,7 @@ cp "$root_dir/src/remote_dev/ssh_integration.py" \
   "$root_dir/src/remote_dev/preview_bridge.py" \
   "$root_dir/src/remote_dev/preview_open.py" \
   "$root_dir/src/remote_dev/download.py" \
+  "$root_dir/src/remote_dev/tssh_reclaim.py" \
   "$stage_dir/$pkg/lib/remote_dev/"
 cp "$root_dir/scripts/remote_dev_ssh_hook.py" "$stage_dir/$pkg/bin/remote-dev-ssh-hook"
 cp "$root_dir/scripts/tdl" "$stage_dir/$pkg/bin/tdl"

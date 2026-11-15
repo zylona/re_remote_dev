@@ -25,12 +25,14 @@ try:
     from .download import DownloadManager, EndpointConnection
     from .preview_bridge import PreviewBridge, new_context
     from .upload import UploadConnection, UploadError, expand_upload_sources, put_files
+    from .tssh_reclaim import ReclaimCandidate, format_elapsed, parse_scan, remote_command as reclaim_remote_command
 except ImportError:  # Direct ``python src/remote_dev/tssh.py`` development entrypoint.
     from remote_dev.lease_config import load as load_lease_settings
     from remote_dev.file_transfer import EndpointIdentity
     from remote_dev.download import DownloadManager, EndpointConnection
     from remote_dev.preview_bridge import PreviewBridge, new_context
     from remote_dev.upload import UploadConnection, UploadError, expand_upload_sources, put_files
+    from remote_dev.tssh_reclaim import ReclaimCandidate, format_elapsed, parse_scan, remote_command as reclaim_remote_command
 
 
 def _version() -> str:
@@ -75,6 +77,120 @@ def _cleanup() -> int:
         print(f"tssh: 清理失败：{result.get('error', 'unknown')}", file=os.sys.stderr)
         return 1
     print(f"tssh: 已清理 {result.get('cleaned_endpoints', 0)} 个代理 endpoint")
+    return 0
+
+
+def _reclaim(raw: list[str]) -> int:
+    parser = argparse.ArgumentParser(
+        prog="tssh reclaim",
+        description="扫描并受控回收目标机上占用 4227/4228 的残留 SSH 转发会话",
+    )
+    parser.add_argument("destination", help="目标，格式为 user@host 或 host")
+    parser.add_argument("-i", "--identity", help="SSH 私钥路径；默认沿用 SSH 配置/agent")
+    parser.add_argument("-p", "--port", type=int, default=22, help="SSH 端口")
+    choice = parser.add_mutually_exclusive_group()
+    choice.add_argument("--yes", "-y", action="store_true", help="确认并结束已识别的转发专用会话")
+    choice.add_argument("--dry-run", action="store_true", help="只扫描和显示，不提示、不结束进程")
+    args = parser.parse_args(raw[1:])
+    if not 1 <= args.port <= 65535:
+        parser.error("SSH 端口必须位于 1-65535")
+    try:
+        user, host = _parse_destination(args.destination)
+    except ValueError as exc:
+        parser.error(str(exc))
+
+    destination = f"{user}@{host}"
+    identity = _resolve_identity(destination, args.identity)
+
+    def remote_call(operation: str, *remote_args: str) -> subprocess.CompletedProcess[str] | None:
+        command = ["ssh", "-T", "-o", "ConnectTimeout=8", "-o", "ServerAliveInterval=5", "-o", "ServerAliveCountMax=2"]
+        if identity:
+            command.extend(["-i", identity])
+        if args.port != 22:
+            command.extend(["-p", str(args.port)])
+        command.extend([destination, reclaim_remote_command(operation, user, *remote_args)])
+        try:
+            return subprocess.run(
+                command,
+                check=False,
+                stdin=None,
+                stdout=subprocess.PIPE,
+                text=True,
+                timeout=30,
+            )
+        except (OSError, subprocess.SubprocessError) as exc:
+            print(f"tssh reclaim: SSH 扫描/回收失败：{exc}", file=sys.stderr)
+            return None
+
+    scanned = remote_call("scan")
+    if scanned is None:
+        return 1
+    if scanned.returncode != 0:
+        if scanned.stdout.strip():
+            print(scanned.stdout.rstrip(), file=sys.stderr)
+        print("tssh reclaim: 无法读取远端端口和 SSH 会话信息；没有结束任何进程。", file=sys.stderr)
+        return 1
+
+    result = parse_scan(scanned.stdout)
+    if result.target_uid is None:
+        print("tssh reclaim: " + (result.blockers[0] if result.blockers else "远端扫描结果无效"), file=sys.stderr)
+        return 1
+    if not result.occupied_ports:
+        print("tssh reclaim: 远端 4227/4228 当前没有监听占用。")
+        return 0
+
+    print("tssh reclaim: 远端端口占用扫描")
+    print(f"  目标：{destination}:{args.port}")
+    print(f"  占用端口：{', '.join(str(port) for port in result.occupied_ports)}")
+    for candidate in result.candidates:
+        ports = ", ".join(str(port) for port in candidate.ports)
+        print(
+            f"  可回收：SSH session {candidate.session_id}，PID {candidate.pid}，"
+            f"无终端，运行 {format_elapsed(candidate.elapsed_seconds)}，端口 {ports}"
+        )
+    for blocker in result.blockers:
+        print(f"  保留：{blocker}")
+    if result.blockers:
+        print("tssh reclaim: 存在归属不明或非转发专用占用；没有结束任何进程。", file=sys.stderr)
+        return 1
+    if not result.candidates:
+        print("tssh reclaim: 没有找到可安全识别的转发专用 SSH 会话；没有结束任何进程。", file=sys.stderr)
+        return 1
+    if args.dry_run:
+        print("预览结束；未修改远端状态。")
+        return 0
+    if not args.yes:
+        if not sys.stdin.isatty():
+            print("tssh reclaim: 当前没有交互终端；请使用 --dry-run 检查，确认后再加 --yes。", file=sys.stderr)
+            return 2
+        try:
+            answer = input("结束以上 SSH 转发会话并释放端口？ [y/N] ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            print("已取消；远端未修改。", file=sys.stderr)
+            return 130
+        if answer not in {"y", "yes"}:
+            print("已取消；远端未修改。")
+            return 0
+
+    failed = False
+    for candidate in result.candidates:
+        terminated = remote_call(
+            "terminate",
+            candidate.session_id,
+            str(candidate.pid),
+            str(candidate.uid),
+        )
+        if terminated is None or terminated.returncode != 0:
+            if terminated is not None and terminated.stdout.strip():
+                print(terminated.stdout.rstrip(), file=sys.stderr)
+            print(f"tssh reclaim: SSH session {candidate.session_id} 状态已变化或无法结束。", file=sys.stderr)
+            failed = True
+            continue
+        print(f"tssh reclaim: 已发送 TERM：session {candidate.session_id}（PID {candidate.pid}）。")
+    if failed:
+        print("请重新执行 tssh reclaim 检查剩余端口。", file=sys.stderr)
+        return 1
+    print("请确认端口释放后重试 tssh。")
     return 0
 
 
@@ -434,7 +550,7 @@ def _resolve_identity(destination: str, explicit: str | None) -> str | None:
 def main(argv: list[str] | None = None) -> int:
     raw_argv = list(argv if argv is not None else os.sys.argv[1:])
     if not raw_argv or raw_argv == ["help"] or raw_argv == ["--help"]:
-        print("用法：tssh user@host [SSH 参数]\n\n管理命令：\n  tssh list                         查看代理 endpoint\n  tssh downloads                    查看 rget/rdo 下载进度\n  tssh put [-r] SOURCE... user@host 上传文件/目录到 ~/Uploads/remote-dev\n  tssh persist user@host [-i KEY]  后台持久保持代理\n  tssh stop user@host              关闭指定持久代理\n  tssh cleanup                     清理全部会话级代理\n  tssh --version                   查看版本")
+        print("用法：tssh user@host [SSH 参数]\n\n管理命令：\n  tssh list                              查看代理 endpoint\n  tssh downloads                         查看 rget/rdo 下载进度\n  tssh put [-r] SOURCE... user@host      上传文件/目录到 ~/Uploads/remote-dev\n  tssh persist user@host [-i KEY]        后台持久保持代理\n  tssh stop user@host                   关闭指定持久代理\n  tssh cleanup                          清理本机所有会话级代理 lease\n  tssh reclaim user@host [--dry-run]     扫描远端 4227/4228 残留 SSH 转发\n  tssh reclaim user@host [--yes]         确认后回收可识别的无终端转发会话\n  tssh --version                        查看版本")
         return 0
     if raw_argv[0] == "list":
         return _status()
@@ -446,6 +562,8 @@ def main(argv: list[str] | None = None) -> int:
         return _persist(raw_argv)
     if raw_argv[0] == "stop":
         return _persist(raw_argv, stop=True)
+    if raw_argv[0] == "reclaim":
+        return _reclaim(raw_argv)
     if raw_argv == ["cleanup"] or raw_argv == ["clear"]:
         return _cleanup()
     parser = argparse.ArgumentParser(prog="tssh", description="使用 remote-dev 4227 转发连接 SSH 目标")

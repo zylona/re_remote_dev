@@ -217,6 +217,18 @@ Codex 登录要求本机 `127.0.0.1:1455` 空闲，因为 OpenAI OAuth 的回调
 SSH 或 VS Code 连接；已经运行的 tssh 终端也不会被强制关闭，但其代理 lease 会被清除，重新
 执行 tssh 即可恢复代理。
 
+如果普通 `ssh user@host` 可以登录，但 `tssh user@host` 因远端 4227/4228 被占用而失败，先用
+普通 SSH 认证路径执行远端检查：
+
+```bash
+tssh reclaim user@host --dry-run
+```
+
+确认输出中的会话确实是可丢弃的无终端 SSH 转发后，再运行 `tssh reclaim user@host` 并在提示时
+输入 `y`；脚本只会结束目标登录用户持有、且能确认仅承载 4227/4228 的 SSH 转发专用会话。
+需要自动化确认时可用 `--yes`。如果端口属于其他用户、普通服务、会话归属不清，或会话还承载
+其他监听端口，命令会拒绝结束进程。回收完成后检查端口并重新运行 `tssh user@host`。
+
 `tssh persist user@host` 只保持远端 `4227` HTTP 代理，不启动 Codex 专用的 `4228→4230`
 回调通道；需要 Codex 登录或回调时，使用普通的 `tssh user@host` 会话。
 
@@ -256,14 +268,14 @@ lease_ttl = 3
 `lease_ttl` 必须大于两个 heartbeat 间隔；无效值会回退到默认值。该配置只包含时序参数，
 不保存密码、私钥或代理凭据。
 
-也可以从 [v0.1.32 Release](https://github.com/zylona/re_remote_dev/releases/tag/v0.1.32) 下载完整本地集成制品。生产环境建议固定版本并校验 SHA256：
+也可以从 [v0.1.33 Release](https://github.com/zylona/re_remote_dev/releases/tag/v0.1.33) 下载完整本地集成制品。生产环境建议固定版本并校验 SHA256：
 
 ```bash
-curl -fLO https://github.com/zylona/re_remote_dev/releases/download/v0.1.32/remote-dev-orchestrator-v0.1.32-linux.tar.gz
-curl -fLO https://github.com/zylona/re_remote_dev/releases/download/v0.1.32/remote-dev-orchestrator-v0.1.32-linux.tar.gz.sha256
-sha256sum -c remote-dev-orchestrator-v0.1.32-linux.tar.gz.sha256
-tar -xzf remote-dev-orchestrator-v0.1.32-linux.tar.gz
-./remote-dev-orchestrator-v0.1.32-linux/install
+curl -fLO https://github.com/zylona/re_remote_dev/releases/download/v0.1.33/remote-dev-orchestrator-v0.1.33-linux.tar.gz
+curl -fLO https://github.com/zylona/re_remote_dev/releases/download/v0.1.33/remote-dev-orchestrator-v0.1.33-linux.tar.gz.sha256
+sha256sum -c remote-dev-orchestrator-v0.1.33-linux.tar.gz.sha256
+tar -xzf remote-dev-orchestrator-v0.1.33-linux.tar.gz
+./remote-dev-orchestrator-v0.1.33-linux/install
 ```
 
 安装器会迁移并备份旧版 `# >>> remote-dev ssh integration >>>` 标记区块，但默认不再写入全局
