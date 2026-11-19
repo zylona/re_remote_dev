@@ -181,7 +181,21 @@ tssh cleanup
 `tssh list` 会按目标主机分组显示 SSH 端口、代理状态、会话数以及实际管理的转发端口：
 
 `rget`/`rdo` 会在当前终端显示友好的进度条，并保持命令直到缓存命中、下载完成或失败；
-不会要求重复执行命令。大文件传输中断后，下一次请求会自动复用匹配的 `.part` 文件继续下载。
+不会要求重复执行命令。`rget` 支持多个文件、远端通配符和 `-r` 目录递归下载；每个文件
+依次复用同一套下载桥、缓存和断点续传逻辑。大文件传输中断后，下一次请求会自动复用匹配的
+`.part` 文件继续下载。`rdo` 保持单文件语义，下载完成后交给本机预览器。
+
+```bash
+rget ./report.md ./figure.png
+rget -r ./results
+rget './reports/*.pdf'
+rget -r './datasets/**/*.csv'
+rdo ./report.md
+```
+
+路径相对于远端当前目录；加引号的通配符由远端 `rget` 展开。目录必须带 `-r`。批量下载
+逐个显示路径和进度，遇到失败会停止，已完成文件仍保留在缓存中。完整用法见
+[`docs/capabilities/download.md`](docs/capabilities/download.md)。
 `tssh downloads` 可查看当前用户仍在运行或最近完成的传输状态，包括已传输字节、速度和预计剩余时间。
 
 上传文件使用 `tssh put`，文件会写入目标用户固定目录 `~/Uploads/remote-dev/`：

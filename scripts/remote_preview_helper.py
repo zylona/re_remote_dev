@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import glob
 import json
 import os
 import posixpath
@@ -12,8 +13,13 @@ import uuid
 
 
 def _usage(command: str) -> None:
-    print(f"用法：{command} PATH", file=sys.stderr)
-    print("PATH 可为远程绝对路径或相对于当前目录的路径。", file=sys.stderr)
+    if command == "rget":
+        print("用法：rget [-r|--recursive] PATH...", file=sys.stderr)
+        print("支持多个文件、远端通配符；目录必须使用 -r。", file=sys.stderr)
+        print("PATH 可为远程绝对路径或相对于当前目录的路径；加引号的通配符由 rget 展开。", file=sys.stderr)
+    else:
+        print("用法：rdo PATH", file=sys.stderr)
+        print("PATH 可为远程绝对路径或相对于当前目录的单个文件路径。", file=sys.stderr)
 
 
 def _context() -> tuple[str, str, str, int] | None:
@@ -36,6 +42,43 @@ def _canonical_path(value: str) -> str:
     if not cwd.startswith("/"):
         raise ValueError("当前远程目录不是绝对路径")
     return posixpath.normpath(value if value.startswith("/") else posixpath.join(cwd, value))
+
+
+def _expand_remote_sources(raw_paths: list[str], *, recursive: bool, cwd: str | None = None) -> list[str]:
+    """Expand current-host paths/globs for a multi-file rget request."""
+    root = cwd or os.getcwd()
+    if not root.startswith("/"):
+        raise ValueError("当前远程目录不是绝对路径")
+    selected: list[str] = []
+    seen: set[str] = set()
+    for raw in raw_paths:
+        if not raw or "\x00" in raw or raw.startswith("~"):
+            raise ValueError("路径不能为空、不能含 NUL，也不支持未展开的 ~")
+        pattern = posixpath.normpath(raw if raw.startswith("/") else posixpath.join(root, raw))
+        matches = sorted(glob.glob(pattern, recursive=True)) if glob.has_magic(pattern) else [pattern]
+        if not matches:
+            raise ValueError(f"远程路径或通配符没有匹配项：{raw}")
+        for match in matches:
+            match = posixpath.normpath(match)
+            if os.path.isdir(match):
+                if not recursive:
+                    raise ValueError(f"{raw} 是目录；递归下载请使用 -r/--recursive")
+                for directory, subdirs, filenames in os.walk(match, followlinks=False):
+                    subdirs.sort()
+                    for filename in sorted(filenames):
+                        candidate = posixpath.normpath(posixpath.join(directory, filename))
+                        if os.path.isfile(candidate) and candidate not in seen:
+                            selected.append(candidate)
+                            seen.add(candidate)
+            elif os.path.isfile(match) or not glob.has_magic(pattern):
+                if match not in seen:
+                    selected.append(match)
+                    seen.add(match)
+            else:
+                raise ValueError(f"远程路径不存在或不是普通文件/目录：{raw}")
+    if not selected:
+        raise ValueError("没有找到可下载的普通文件")
+    return selected
 
 
 def _format_bytes(value: object) -> str:
@@ -81,25 +124,7 @@ def _print_progress(command: str, value: dict[str, object], *, final: bool = Fal
     print(prefix + text + suffix, end="", flush=True)
 
 
-def main(argv: list[str] | None = None) -> int:
-    args = list(sys.argv[1:] if argv is None else argv)
-    command = os.path.basename(sys.argv[0])
-    operation = "open" if command == "rdo" else "get"
-    if args and args[0] in {"--help", "-h"}:
-        _usage(command)
-        return 0
-    if len(args) != 1:
-        _usage(command)
-        return 2
-    context = _context()
-    if context is None:
-        print("当前 SSH 会话没有可用的 tssh 预览桥。请使用 tssh 重新连接。", file=sys.stderr)
-        return 1
-    try:
-        remote_path = _canonical_path(args[0])
-    except ValueError as exc:
-        print(f"rdo/rget: {exc}", file=sys.stderr)
-        return 2
+def _request_one(command: str, operation: str, remote_path: str, context: tuple[str, str, str, int]) -> tuple[int, dict[str, object] | None]:
     endpoint, session, nonce, port = context
     payload = {
         "operation": operation,
@@ -127,7 +152,7 @@ def main(argv: list[str] | None = None) -> int:
                     value = json.loads(raw.decode())
                     if not isinstance(value, dict) or not value.get("ok"):
                         print(f"{command}: {value.get('error', '请求失败') if isinstance(value, dict) else '请求失败'}", file=sys.stderr)
-                        return 1
+                        return 1, None
                     last_value = value
                     if not announced:
                         request_id = value.get("request_id", payload["request_id"])
@@ -151,10 +176,10 @@ def main(argv: list[str] | None = None) -> int:
                 final_value = last_value
     except (OSError, TimeoutError, UnicodeError, json.JSONDecodeError) as exc:
         print(f"{command}: 无法连接本地预览桥：{exc}", file=sys.stderr)
-        return 1
+        return 1, None
     if final_value is None:
         print(f"{command}: 本地预览桥提前关闭连接", file=sys.stderr)
-        return 1
+        return 1, None
     state_labels = {
         "CACHED": "缓存命中",
         "READY": "下载完成",
@@ -164,13 +189,78 @@ def main(argv: list[str] | None = None) -> int:
     state = final_value.get("state")
     if state in {"QUEUED", "RUNNING"} and final_value.get("event") != "complete":
         print(f"{command}: 预览桥在传输完成前关闭连接（状态：{state}）。请刷新本地 tssh 服务后重试。", file=sys.stderr)
-        return 1
+        return 1, final_value
     if state == "FAILED":
         print(f"{command}: {final_value.get('error', '下载失败')}", file=sys.stderr)
-        return 1
+        return 1, final_value
     print(f"      状态：{state_labels.get(state, state or '已完成')}")
     if final_value.get("local_path"):
         print(f"      存储路径：{final_value['local_path']}")
+    return 0, final_value
+
+
+def _parse_rget_args(args: list[str]) -> tuple[bool, list[str]]:
+    recursive = False
+    paths: list[str] = []
+    options = True
+    for value in args:
+        if options and value == "--":
+            options = False
+        elif options and value in {"-r", "--recursive"}:
+            recursive = True
+        elif options and value.startswith("-"):
+            raise ValueError(f"未知选项：{value}")
+        else:
+            paths.append(value)
+    if not paths:
+        raise ValueError("至少需要一个 PATH")
+    return recursive, paths
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = list(sys.argv[1:] if argv is None else argv)
+    command = os.path.basename(sys.argv[0])
+    operation = "open" if command == "rdo" else "get"
+    if args and args[0] in {"--help", "-h"}:
+        _usage(command)
+        return 0
+    if command == "rdo":
+        if len(args) != 1:
+            _usage(command)
+            return 2
+        try:
+            remote_paths = [_canonical_path(args[0])]
+        except ValueError as exc:
+            print(f"rdo: {exc}", file=sys.stderr)
+            return 2
+    else:
+        try:
+            recursive, raw_paths = _parse_rget_args(args)
+            remote_paths = _expand_remote_sources(raw_paths, recursive=recursive)
+        except ValueError as exc:
+            print(f"rget: {exc}", file=sys.stderr)
+            _usage(command)
+            return 2
+
+    context = _context()
+    if context is None:
+        print("当前 SSH 会话没有可用的 tssh 预览桥。请使用 tssh 重新连接。", file=sys.stderr)
+        return 1
+    total = len(remote_paths)
+    for index, remote_path in enumerate(remote_paths, 1):
+        if total > 1:
+            print(f"{command}: [{index}/{total}] {remote_path}", flush=True)
+        status, _ = _request_one(command, operation, remote_path, context)
+        if status:
+            if total > 1:
+                print(
+                    f"{command}: 在第 {index}/{total} 个文件处停止；"
+                    "此前已完成的文件仍保存在下载缓存中。",
+                    file=sys.stderr,
+                )
+            return status
+    if command == "rget" and total > 1:
+        print(f"rget: 已完成 {total} 个文件。")
     return 0
 
 
