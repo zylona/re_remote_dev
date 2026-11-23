@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.1.34]
+
+- `tssh` 及其 `put`、`persist`、`stop`、`reclaim` 子命令通过 `ssh -G` 读取 SSH 配置中的有效主机、用户、端口和密钥；显式 `-p` 覆盖配置端口。
+- `setup` 增加 SSH 端口输入，并将该端口贯穿 SSH 探测、Ansible 连接和临时代理转发。
+- 文档说明不同 `HostName:Port` endpoint 可并行工作，远端 4227/4228 仍只绑定 loopback。
+
 ## [0.1.33]
 
 - 新增 `tssh reclaim user@host`，通过普通 SSH 检查并交互回收目标用户持有的无终端 4227/4228 转发会话；支持 `--dry-run` 和显式 `--yes`，遇到其他用户或无法确认归属时拒绝结束进程。

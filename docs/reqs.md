@@ -5,6 +5,8 @@
 ## 能力契约
 
 - 支持常见 Linux 发行版和 apt、dnf/yum、apk、pacman、zypper；目标机无需预装 Python。
+- 交互式 setup 支持自定义 SSH 服务端口，默认 `22`；探测、Ansible 和临时代理隧道使用同一端口。
+- `tssh` 工具及管理子命令在未传 `-p` 时使用 OpenSSH 有效配置中的端口；显式 `-p` 覆盖该值。编排器按实际 `HostName:Port` 识别 endpoint，允许不同设备及端口并发使用。
 - 恢复 zsh、Antidote、Powerlevel10k、mise、fzf、zoxide、Zellij、tmux fallback、Neovim 和 Codex CLI。
 - 通过 mise 管理的 Node.js/npm/npx 恢复预设的全局 Codex Skills，并由独立只读 verify 检查安装完整性。
 - 在 Codex CLI 与 mise Node.js 均可用后安装 CodexSwitch，为目标用户保存多个 Codex 账号并支持按账号启动。

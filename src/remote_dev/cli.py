@@ -24,13 +24,16 @@ RUN_ID = uuid.uuid4().hex[:12]
 _BOOTSTRAP_TARGET_DIGEST: str | None = None
 
 
-def _detect_become_method(destination: str, identity_file: str) -> str:
+def _detect_become_method(destination: str, identity_file: str, port: int = 22) -> str:
     """Choose the installed escalation path without consuming a password."""
-    probe = [
-        "ssh", "-F", "/dev/null", "-i", str(Path(identity_file).expanduser()),
+    probe = ["ssh"]
+    if port != 22:
+        probe.extend(["-p", str(port)])
+    probe.extend([
+        "-F", "/dev/null", "-i", str(Path(identity_file).expanduser()),
         "-o", "BatchMode=yes", "-o", "ConnectTimeout=8", destination,
         "sh", "-c", "'if command -v sudo >/dev/null 2>&1; then echo sudo; elif command -v su >/dev/null 2>&1; then echo su; else echo unavailable; fi'",
-    ]
+    ])
     result = subprocess.run(probe, check=False, capture_output=True, text=True, timeout=15)
     if result.returncode != 0:
         detail = (result.stderr or result.stdout or "SSH 连接失败").strip().splitlines()[-1]
@@ -41,7 +44,12 @@ def _detect_become_method(destination: str, identity_file: str) -> str:
     return method
 
 
-def _detect_become_for_setup(destination: str, identity_file: str | None, auth_password: str | None = None) -> str:
+def _detect_become_for_setup(
+    destination: str,
+    identity_file: str | None,
+    auth_password: str | None = None,
+    port: int = 22,
+) -> str:
     """Select sudo when installed and distinguish password-required from denial.
 
     ``sudo -n`` returns non-zero both when a password is needed and when the
@@ -50,6 +58,10 @@ def _detect_become_for_setup(destination: str, identity_file: str | None, auth_p
     falls back to ``su``.
     """
     command = ["ssh"]
+    if not 1 <= port <= 65535:
+        raise ValueError("SSH 端口必须位于 1..65535")
+    if port != 22:
+        command.extend(["-p", str(port)])
     if identity_file:
         command.extend(["-F", "/dev/null", "-i", str(Path(identity_file).expanduser())])
     elif auth_password is not None:
@@ -341,11 +353,13 @@ def apply(inventory: Path = typer.Option(Path("inventory/production.yml"), "--in
         "remote_port_max": int(remote.get("proxy", {}).get("remote_port_range", [40000, 60000])[1]),
     })
     key = host.get("ansible_ssh_private_key_file", remote["ssh_private_key_file"])
-    become_method = host.get("ansible_become_method") or _detect_become_method(destination, key)
+    ssh_port = int(host.get("ansible_port", 22))
+    become_method = host.get("ansible_become_method") or _detect_become_method(destination, key, ssh_port)
     with ReverseProxyTunnel(
         settings=settings,
         destination=destination,
         identity_file=key,
+        port=ssh_port,
         ssh_extra_args=(["-F", "/dev/null"] if __import__("os").environ.get("REMOTE_DEV_SSH_CONFIG") == "/dev/null" else []),
     ) as tunnel:
         # Ansible does not consistently expand ``~`` in connection variables
@@ -379,6 +393,9 @@ def setup() -> None:
     console.print("[bold cyan]阶段 2/2：远程目标交互式恢复[/bold cyan]")
     host = typer.prompt("目标 IP 或主机名")
     login_user = typer.prompt("SSH 登录用户名")
+    ssh_port = typer.prompt("SSH 端口", default=22, type=int)
+    if not 1 <= ssh_port <= 65535:
+        raise typer.BadParameter("SSH 端口必须位于 1-65535")
     auth = typer.prompt("认证方式（key/password）", default="key").strip().lower()
     if auth not in {"key", "password"}:
         raise typer.BadParameter("认证方式必须是 key 或 password")
@@ -393,13 +410,18 @@ def setup() -> None:
         password = typer.prompt("SSH 密码", hide_input=True, confirmation_prompt=False)
     target_user = typer.prompt("最终配置用户名", default=login_user if login_user != "root" else "dev")
     target_password = typer.prompt("目标用户密码（可留空，使用 SSH 公钥）", default="", hide_input=True, confirmation_prompt=False)
-    become_method = "su" if login_user == "root" else _detect_become_for_setup(destination=f"{login_user}@{host}", identity_file=key, auth_password=password)
+    become_method = "su" if login_user == "root" else _detect_become_for_setup(
+        destination=f"{login_user}@{host}",
+        identity_file=key,
+        auth_password=password,
+        port=ssh_port,
+    )
     destination = f"{login_user}@{host}"
     # The remote Codex shim must use the same stable target digest as the
     # local orchestrator.  The temporary inventory name (``interactive``)
     # is not an identity and caused OAuth events to be discarded.
     from .orchestrator.model import TargetKey
-    target_digest = TargetKey(host, 22, target_user).digest
+    target_digest = TargetKey(host, ssh_port, target_user).digest
     run_dir = Path(".local/runs") / RUN_ID
     run_dir.mkdir(parents=True, exist_ok=True)
     inventory = run_dir / "interactive.yml"
@@ -417,6 +439,7 @@ def setup() -> None:
             "children": {"remote_dev_targets": {"hosts": {"interactive": {
                 "ansible_host": host,
                 "ansible_user": login_user,
+                "ansible_port": ssh_port,
             }}}},
         }
     }
@@ -431,7 +454,13 @@ def setup() -> None:
     try:
         from .proxy import ProxySettings, ReverseProxyTunnel
         settings = ProxySettings()
-        with ReverseProxyTunnel(settings=settings, destination=destination, identity_file=key, auth_password=password) as tunnel:
+        with ReverseProxyTunnel(
+            settings=settings,
+            destination=destination,
+            identity_file=key,
+            port=ssh_port,
+            auth_password=password,
+        ) as tunnel:
             extra = {"ansible_become_method": become_method, "codex_target_digest": target_digest}
             if key or password is not None:
                 extra["ansible_ssh_common_args"] = "-F/dev/null"

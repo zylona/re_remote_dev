@@ -59,7 +59,11 @@ def test_parse_scan_refuses_other_user_or_non_forwarding_session():
 
 
 def test_tssh_reclaim_dry_run_never_terminates(monkeypatch, capsys):
-    monkeypatch.setattr(tssh, "_resolve_identity", lambda *_: None)
+    monkeypatch.setattr(
+        tssh,
+        "_resolve_ssh_target",
+        lambda *_: tssh._ResolvedSSHTarget("host", "alice", 22, None),
+    )
     calls: list[list[str]] = []
 
     def run(command, **kwargs):
@@ -75,7 +79,11 @@ def test_tssh_reclaim_dry_run_never_terminates(monkeypatch, capsys):
 
 
 def test_tssh_reclaim_yes_rechecks_and_terminates_candidate(monkeypatch, capsys):
-    monkeypatch.setattr(tssh, "_resolve_identity", lambda *_: None)
+    monkeypatch.setattr(
+        tssh,
+        "_resolve_ssh_target",
+        lambda *_: tssh._ResolvedSSHTarget("host", "alice", 22, None),
+    )
     calls: list[list[str]] = []
 
     def run(command, **kwargs):
@@ -92,7 +100,11 @@ def test_tssh_reclaim_yes_rechecks_and_terminates_candidate(monkeypatch, capsys)
 
 
 def test_tssh_reclaim_refuses_to_act_when_any_owner_is_ambiguous(monkeypatch, capsys):
-    monkeypatch.setattr(tssh, "_resolve_identity", lambda *_: None)
+    monkeypatch.setattr(
+        tssh,
+        "_resolve_ssh_target",
+        lambda *_: tssh._ResolvedSSHTarget("host", "alice", 22, None),
+    )
     calls: list[list[str]] = []
 
     def run(command, **kwargs):

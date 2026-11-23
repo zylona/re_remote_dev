@@ -7,6 +7,7 @@
 ## 输入
 
 - `inventory/production.yml` 中的 `ansible_host`、端口、用户和 key 路径；
+- `setup` 向导中的 SSH 端口，默认 `22`；
 - `remote_dev.target_user`；
 - `remote_dev.proxy.mode`：`auto`、`required` 或 `off`；
 - `remote_dev.proxy.host/port`：执行端已有 HTTP 代理，不是远端持久配置。
@@ -16,6 +17,8 @@
 目标设备必须预先配置与执行端匹配的 SSH 公钥；连接用户必须是具备 sudo 权限的目标用户。本项目不负责密码引导、公钥下发、软件安装或本地密码管理。
 
 - `ansible_user` 定义 SSH 登录用户，`remote_dev.target_user` 定义最终配置用户；两者不同的切换必须由用户预先保证权限和公钥。
+- `setup` 收集的 SSH 端口会同步用于 SSH 提权探测、临时反向代理隧道和生成的 `ansible_port`，并参与目标身份摘要；不会只让登录走自定义端口而让后续阶段回退到 `22`。
+- `tssh`、`put`、`persist`、`stop` 和 `reclaim` 通过 `ssh -G` 解析 SSH 别名对应的有效 `HostName`、`User`、`Port` 和 `IdentityFile`。省略 `-p` 时服从 `~/.ssh/config`，显式 `-p` 覆盖配置；编排器以解析后的主机和端口区分 endpoint。
 - `remote_dev.ssh_private_key_file` 或主机级 `ansible_ssh_private_key_file` 指向执行端私钥。私钥内容不复制到仓库、不上传目标机。
 - 严格校验 SSH host key；连接失败直接报告，不尝试密码 fallback。
 - 项目不维护 `.local/credentials.yml`；sudo 密码只通过 Ansible `--ask-become-pass` 在 TTY 中交互输入。
@@ -31,6 +34,8 @@
 ## 运行时契约
 
 - 隧道使用 `SSH -R 127.0.0.1:<随机端口>:<执行端代理>`；
+- SSH 可以连接自定义公网端口；项目转发监听仅绑定目标机 `127.0.0.1`，不要求目标增加公网开放端口；
+- 不同目标可使用不同公网 SSH 端口并发运行；代理/事件/预览反向转发仍通过各自 SSH TCP 连接建立，远端 loopback 端口仍为 `4227/4228`；
 - 端口范围默认 40000–60000；`ExitOnForwardFailure=yes`；
 - 临时转发禁用 SSH multiplexing，避免旧 master 和用户切换造成端口冲突；
 - 通过环境变量将 `http_proxy/https_proxy/no_proxy` 传给需要下载的 Role；

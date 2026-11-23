@@ -16,6 +16,7 @@ import sys
 import threading
 import time
 import uuid
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -87,27 +88,26 @@ def _reclaim(raw: list[str]) -> int:
     )
     parser.add_argument("destination", help="目标，格式为 user@host 或 host")
     parser.add_argument("-i", "--identity", help="SSH 私钥路径；默认沿用 SSH 配置/agent")
-    parser.add_argument("-p", "--port", type=int, default=22, help="SSH 端口")
+    parser.add_argument("-p", "--port", type=int, help="SSH 端口；默认读取 SSH config")
     choice = parser.add_mutually_exclusive_group()
     choice.add_argument("--yes", "-y", action="store_true", help="确认并结束已识别的转发专用会话")
     choice.add_argument("--dry-run", action="store_true", help="只扫描和显示，不提示、不结束进程")
     args = parser.parse_args(raw[1:])
-    if not 1 <= args.port <= 65535:
+    if args.port is not None and not 1 <= args.port <= 65535:
         parser.error("SSH 端口必须位于 1-65535")
     try:
-        user, host = _parse_destination(args.destination)
+        target = _resolve_ssh_target(args.destination, args.identity, args.port)
     except ValueError as exc:
         parser.error(str(exc))
 
-    destination = f"{user}@{host}"
-    identity = _resolve_identity(destination, args.identity)
+    destination = target.canonical_destination
+    user, host, identity = target.user, target.hostname, target.identity_file
 
     def remote_call(operation: str, *remote_args: str) -> subprocess.CompletedProcess[str] | None:
         command = ["ssh", "-T", "-o", "ConnectTimeout=8", "-o", "ServerAliveInterval=5", "-o", "ServerAliveCountMax=2"]
         if identity:
             command.extend(["-i", identity])
-        if args.port != 22:
-            command.extend(["-p", str(args.port)])
+        command.extend(["-p", str(target.port)])
         command.extend([destination, reclaim_remote_command(operation, user, *remote_args)])
         try:
             return subprocess.run(
@@ -140,7 +140,7 @@ def _reclaim(raw: list[str]) -> int:
         return 0
 
     print("tssh reclaim: 远端端口占用扫描")
-    print(f"  目标：{destination}:{args.port}")
+    print(f"  目标：{destination}:{target.port}")
     print(f"  占用端口：{', '.join(str(port) for port in result.occupied_ports)}")
     for candidate in result.candidates:
         ports = ", ".join(str(port) for port in candidate.ports)
@@ -313,24 +313,23 @@ def _persist(raw: list[str], stop: bool = False) -> int:
     parser = argparse.ArgumentParser(prog=f"tssh {'stop' if stop else 'persist'}")
     parser.add_argument("destination", help="目标，格式为 user@host 或 host")
     parser.add_argument("-i", "--identity")
-    parser.add_argument("-p", "--port", type=int, default=22)
+    parser.add_argument("-p", "--port", type=int, help="SSH 端口；默认读取 SSH config")
     args = parser.parse_args(raw[1:])
     try:
-        user, host = _parse_destination(args.destination)
+        target = _resolve_ssh_target(args.destination, args.identity, args.port)
     except ValueError as exc:
         parser.error(str(exc))
-    if not 1 <= args.port <= 65535:
-        parser.error("SSH 端口必须位于 1-65535")
-    name = f"tssh-session-{_endpoint_digest(host, args.port)}.service"
+    user, host, port = target.user, target.hostname, target.port
+    name = f"tssh-session-{_endpoint_digest(host, port)}.service"
     path = _service_path() / name
     if stop:
         subprocess.run(["systemctl", "--user", "disable", "--now", name], check=False)
         path.unlink(missing_ok=True)
         subprocess.run(["systemctl", "--user", "daemon-reload"], check=False)
-        print(f"tssh: 已停止持久代理 {user}@{host}:{args.port}")
+        print(f"tssh: 已停止持久代理 {user}@{host}:{port}")
         return 0
-    identity = _resolve_identity(args.destination, args.identity)
-    command = _persistent_command(args.destination, identity, args.port)
+    identity = target.identity_file
+    command = _persistent_command(target.canonical_destination, identity, port)
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     path.write_text(_persistent_unit_text(host, command), encoding="utf-8")
     path.chmod(0o600)
@@ -345,7 +344,7 @@ def _persist(raw: list[str], stop: bool = False) -> int:
     # systemd can report a successfully started lease process before the
     # orchestrator has attempted the remote bind.  Give that short handshake
     # a bounded window, then refuse to leave a retrying broken unit behind.
-    digest = _endpoint_digest(host, args.port)
+    digest = _endpoint_digest(host, port)
     observed: dict[str, Any] | None = None
     deadline = time.monotonic() + 3.0
     while time.monotonic() < deadline:
@@ -369,7 +368,7 @@ def _persist(raw: list[str], stop: bool = False) -> int:
         print(f"tssh: 持久代理未建立：{error}", file=sys.stderr)
         print("      未自动终止未知的远端 SSH 连接；确认归属后可重试 tssh persist。", file=sys.stderr)
         return 1
-    print(f"tssh: 已启用本次开机周期的持久代理 {user}@{host}:{args.port}")
+    print(f"tssh: 已启用本次开机周期的持久代理 {user}@{host}:{port}")
     print("      重启后不会自动恢复，需要再次执行 tssh persist")
     print(f"      unit: {name}")
     return 0
@@ -380,18 +379,16 @@ def _put(raw: list[str]) -> int:
     parser.add_argument("-r", "--recursive", action="store_true", help="递归上传目录并保留目录结构")
     parser.add_argument("paths", nargs="+", help="一个或多个本地文件/目录，最后一个参数为目标")
     parser.add_argument("-i", "--identity", help="SSH 私钥路径")
-    parser.add_argument("-p", "--port", type=int, default=22, help="SSH 端口")
+    parser.add_argument("-p", "--port", type=int, help="SSH 端口；默认读取 SSH config")
     args = parser.parse_args(raw[1:])
     if len(args.paths) < 2:
         parser.error("至少需要一个源路径和一个目标（目标必须放在最后）")
     source_paths, destination = args.paths[:-1], args.paths[-1]
-    if not 1 <= args.port <= 65535:
-        parser.error("SSH 端口必须位于 1-65535")
     try:
-        user, host = _parse_destination(destination)
+        target = _resolve_ssh_target(destination, args.identity, args.port)
     except ValueError as exc:
         parser.error(str(exc))
-    identity = _resolve_identity(destination, args.identity)
+    user, host, port, identity = target.user, target.hostname, target.port, target.identity_file
     try:
         items = expand_upload_sources(source_paths, recursive=args.recursive)
     except UploadError as exc:
@@ -399,11 +396,11 @@ def _put(raw: list[str]) -> int:
         return 1
     for local_path, remote_relative in items:
         print(f"tssh put: {local_path} → {remote_relative}")
-    print(f"目标：{user}@{host}:{args.port}")
+    print(f"目标：{user}@{host}:{port}")
     print("远程目录：~/Uploads/remote-dev")
     try:
         control_path = Path(os.environ.get("XDG_RUNTIME_DIR", "/tmp")) / f"tssh-put-{os.getuid()}-{uuid.uuid4().hex[:10]}"
-        remote_paths = put_files(UploadConnection(host, args.port, user, identity, str(control_path)), items)
+        remote_paths = put_files(UploadConnection(host, port, user, identity, str(control_path)), items)
     except (UploadError, OSError, subprocess.SubprocessError) as exc:
         print(f"tssh put: {exc}", file=sys.stderr)
         return 1
@@ -413,6 +410,11 @@ def _put(raw: list[str]) -> int:
 
 
 def _parse_destination(value: str) -> tuple[str, str]:
+    """Parse the user/host spelling without applying SSH config defaults.
+
+    Kept as a small compatibility helper for callers that only need to split
+    the CLI spelling. Connection code must use ``_resolve_ssh_target``.
+    """
     if "@" in value:
         user, host = value.split("@", 1)
     else:
@@ -523,34 +525,74 @@ def _proxy_shell_command(proxy_port: int = 4227) -> str:
     return f"{exports}; exec \"${{SHELL:-/bin/sh}}\" -l"
 
 
-def _resolve_identity(destination: str, explicit: str | None) -> str | None:
-    """Resolve the first usable IdentityFile from OpenSSH's effective config."""
-    if explicit:
-        return str(Path(explicit).expanduser())
+@dataclass(frozen=True, slots=True)
+class _ResolvedSSHTarget:
+    hostname: str
+    user: str
+    port: int
+    identity_file: str | None
+
+    @property
+    def canonical_destination(self) -> str:
+        return f"{self.user}@{self.hostname}"
+
+
+def _resolve_ssh_target(
+    destination: str,
+    explicit_identity: str | None,
+    explicit_port: int | None,
+) -> _ResolvedSSHTarget:
+    """Resolve HostName/User/Port/IdentityFile exactly once using ``ssh -G``."""
+    if explicit_port is not None and not 1 <= explicit_port <= 65535:
+        raise ValueError("SSH 端口必须位于 1-65535")
+    command = ["ssh", "-G"]
+    if explicit_port is not None:
+        command.extend(["-p", str(explicit_port)])
+    if explicit_identity:
+        command.extend(["-i", str(Path(explicit_identity).expanduser())])
+    command.append(destination)
     try:
         result = subprocess.run(
-            ["ssh", "-G", destination],
+            command,
             check=False,
             capture_output=True,
             text=True,
-            timeout=5,
+            timeout=10,
         )
-    except (OSError, subprocess.SubprocessError):
-        return None
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise ValueError(f"无法读取 SSH 有效配置：{exc}") from exc
+    if result.returncode != 0:
+        detail = result.stderr.strip() or "ssh -G 执行失败"
+        raise ValueError(f"无法解析 SSH 目标 {destination!r}：{detail}")
+    values: dict[str, list[str]] = {}
     for line in result.stdout.splitlines():
         key, _, value = line.partition(" ")
-        if key != "identityfile" or not value:
-            continue
-        candidate = Path(value).expanduser()
-        if candidate.is_file():
-            return str(candidate)
-    return None
+        if value:
+            values.setdefault(key, []).append(value.strip())
+    hostname = values.get("hostname", [""])[0]
+    user = values.get("user", [""])[0]
+    try:
+        port = int(values.get("port", [""])[0])
+    except ValueError as exc:
+        raise ValueError(f"SSH 对目标 {destination!r} 返回了无效端口") from exc
+    if not hostname or not user or not 1 <= port <= 65535:
+        raise ValueError(f"SSH 对目标 {destination!r} 返回了不完整配置（HostName/User/Port）")
+    identity: str | None = None
+    if explicit_identity:
+        identity = str(Path(explicit_identity).expanduser())
+    else:
+        for value in values.get("identityfile", []):
+            candidate = Path(value).expanduser()
+            if candidate.is_file():
+                identity = str(candidate)
+                break
+    return _ResolvedSSHTarget(hostname, user, port, identity)
 
 
 def main(argv: list[str] | None = None) -> int:
     raw_argv = list(argv if argv is not None else os.sys.argv[1:])
     if not raw_argv or raw_argv == ["help"] or raw_argv == ["--help"]:
-        print("用法：tssh user@host [SSH 参数]\n\n管理命令：\n  tssh list                              查看代理 endpoint\n  tssh downloads                         查看 rget/rdo 下载进度\n  tssh put [-r] SOURCE... user@host      上传文件/目录到 ~/Uploads/remote-dev\n  tssh persist user@host [-i KEY]        后台持久保持代理\n  tssh stop user@host                   关闭指定持久代理\n  tssh cleanup                          清理本机所有会话级代理 lease\n  tssh reclaim user@host [--dry-run]     扫描远端 4227/4228 残留 SSH 转发\n  tssh reclaim user@host [--yes]         确认后回收可识别的无终端转发会话\n  tssh --version                        查看版本")
+        print("用法：tssh [-p SSH_PORT] [-i KEY] user@host [SSH 参数]\n       tssh user@host [-p SSH_PORT] [-i KEY] [SSH 参数]\n\n未指定 -p 时，使用 SSH config 解析出的 HostName、User、Port 和 IdentityFile。\n显式 -p 会覆盖该目标配置的端口。\n\n管理命令：\n  tssh list                                      查看代理 endpoint\n  tssh downloads                                 查看 rget/rdo 下载进度\n  tssh put [-r] SOURCE... user@host [-p PORT]    上传文件/目录到 ~/Uploads/remote-dev\n  tssh persist user@host [-p PORT] [-i KEY]      后台持久保持代理\n  tssh stop user@host [-p PORT]                 关闭指定持久代理\n  tssh cleanup                                  清理本机所有会话级代理 lease\n  tssh reclaim user@host [-p PORT] [--dry-run]   扫描远端 4227/4228 残留 SSH 转发\n  tssh reclaim user@host [-p PORT] [--yes]       确认后回收可识别的无终端转发会话\n  tssh --version                                查看版本")
         return 0
     if raw_argv[0] == "list":
         return _status()
@@ -570,20 +612,18 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--version", action="version", version=f"%(prog)s {_version()}")
     parser.add_argument("destination", help="SSH 目标，格式为 user@host 或 host")
     parser.add_argument("-i", "--identity", help="SSH 私钥路径")
-    parser.add_argument("-p", "--port", type=int, default=22, help="SSH 端口")
+    parser.add_argument("-p", "--port", type=int, help="覆盖 SSH config 中该目标的端口")
     parser.add_argument("--persistent-run", action="store_true", help=argparse.SUPPRESS)
     args, passthrough = parser.parse_known_args(argv)
     args.ssh_args = passthrough
-    if not 1 <= args.port <= 65535:
-        parser.error("SSH 端口必须位于 1-65535")
     try:
-        user, host = _parse_destination(args.destination)
+        target = _resolve_ssh_target(args.destination, args.identity, args.port)
     except ValueError as exc:
         parser.error(str(exc))
+    user, host, port, identity = target.user, target.hostname, target.port, target.identity_file
     session_id = uuid.uuid4().hex
-    endpoint = {"hostname": host, "port": args.port}
+    endpoint = {"hostname": host, "port": port}
     candidate: dict[str, str] = {"user": user}
-    identity = _resolve_identity(args.destination, args.identity)
     if identity:
         candidate["identity_file"] = identity
     stop = threading.Event()
@@ -654,14 +694,14 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         # P2 adds a separate reverse leg.  Failure is intentionally soft: the
         # SSH session remains a native interactive session without preview.
-        preview_context = new_context(EndpointIdentity(host, args.port, user).digest(), session_id)
+        preview_context = new_context(EndpointIdentity(host, port, user).digest(), session_id)
         control_dir = Path(os.environ.get("XDG_RUNTIME_DIR", f"/tmp/tssh-{os.getuid()}")) / "tssh" / "preview-cm"
         control_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
-        control_path = control_dir / hashlib.sha256(f"{host}:{args.port}|{user}".encode()).hexdigest()[:32]
-        download_manager = DownloadManager(EndpointConnection(host, args.port, user, identity, str(control_path)))
+        control_path = control_dir / hashlib.sha256(f"{host}:{port}|{user}".encode()).hexdigest()[:32]
+        download_manager = DownloadManager(EndpointConnection(host, port, user, identity, str(control_path)))
         preview_bridge = PreviewBridge(preview_context, download_manager.submit)
         preview_context = preview_bridge.start()
-        preview_forward = None if args.ssh_args else _preview_forward(args.destination, identity, args.port, preview_context.local_port)
+        preview_forward = None if args.ssh_args else _preview_forward(target.canonical_destination, identity, port, preview_context.local_port)
         if preview_forward is not None:
             preview_context = type(preview_context)(
                 preview_context.endpoint_digest,
@@ -688,7 +728,7 @@ def main(argv: list[str] | None = None) -> int:
                 preview_context.nonce,
                 preview_context.remote_port,
             )
-            ssh_args = _ssh_command(args.destination, identity, args.port, args.ssh_args, remote_command)
+            ssh_args = _ssh_command(args.destination, identity, port, args.ssh_args, remote_command)
         else:
             preview_bridge.stop()
             preview_bridge = None
@@ -696,7 +736,7 @@ def main(argv: list[str] | None = None) -> int:
             # the normal 4227 lease is still valid.  Carry its marker into a
             # native login shell so Nvim and Git inherit the HTTP proxy.
             remote_command = _proxy_shell_command() if not args.ssh_args else None
-            ssh_args = _ssh_command(args.destination, identity, args.port, args.ssh_args, remote_command)
+            ssh_args = _ssh_command(args.destination, identity, port, args.ssh_args, remote_command)
         return subprocess.run(ssh_args, check=False).returncode
     except (OSError, TimeoutError, ValueError, ConnectionError) as exc:
         print(f"tssh: 本地编排器不可用：{exc}", file=os.sys.stderr)

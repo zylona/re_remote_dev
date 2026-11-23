@@ -57,7 +57,9 @@ uv sync --locked
 ./re-remote setup
 ```
 
-向导会依次询问目标地址、SSH 用户、认证方式、最终配置用户和 sudo/root 提权密码。选择
+向导会依次询问目标地址、SSH 用户、SSH 端口、认证方式、最终配置用户和 sudo/root 提权密码。
+SSH 端口默认是 `22`；受限设备使用自定义端口时，例如填写 `30112`，该端口会用于 SSH 探测、
+临时代理转发和 Ansible 连接。远端转发仍绑定目标机 loopback，不需要增加公网开放端口。选择
 `key` 时，私钥路径可以直接留空；此时会完整复用当前用户的 `~/.ssh/config`、默认密钥和
 `ssh-agent`。只有填写路径时才会强制使用指定私钥。选择 `password` 时仍使用一次性的
 密码认证，不保存密码。若目标机无外网，请先在控制端启动 HTTP 代理并监听
@@ -145,6 +147,8 @@ systemctl --user status tssh.socket
 ```bash
 tssh user@host
 tssh -i ~/.ssh/id_ed25519 user@host
+tssh root@sh02-ssh.gpuhome.cc -p 30112
+tssh -p 30112 root@sh02-ssh.gpuhome.cc
 ```
 
 连接期间默认每 1 秒自动续租，退出或异常断线后由编排器释放 lease；同一 endpoint 的多用户、多
@@ -166,10 +170,18 @@ tssh cleanup
 ```
 
 `tssh` 与普通 `ssh` 使用相同的终端体验，但会先申请项目 Lease，并自动建立或复用远端
-`127.0.0.1:4227` 转发。`-i`/`-p` 可放在目标前后；复杂 SSH 参数建议先写入普通
+`127.0.0.1:4227` 转发。`tssh` 通过 `ssh -G` 读取目标在 `~/.ssh/config` 中的有效
+`HostName`、`User`、`Port` 和 `IdentityFile`。因此，目标配置了 `Port 30112` 时，直接运行
+`tssh alias` 或 `tssh user@alias` 就会使用该端口；显式 `-p PORT`/`--port PORT` 会覆盖配置，
+并用于交互登录、代理隧道、事件回调隧道和预览桥。例：`tssh root@sh02-ssh.gpuhome.cc -p 30112`。
+这些隧道的远端监听都绑定 `127.0.0.1`，不要求平台额外暴露公网端口。`-i`/`-p` 可放在目标前后；复杂 SSH 参数建议先写入普通
 `~/.ssh/config`，再使用 `tssh user@host`。如果不显式传 `-i`，`tssh` 会通过 `ssh -G` 自动
 解析当前 SSH 配置中的 `IdentityFile`；`-i` 可覆盖该结果。`tssh` 依赖 SSH 密钥或 ssh-agent；
 密码登录请继续使用普通 `ssh`。
+
+`tssh put`、`persist`、`stop` 和 `reclaim` 也遵循相同的端口解析规则：省略 `-p` 时读取目标
+SSH 配置，显式 `-p` 时覆盖。编排器按解析后的实际主机、端口维护 endpoint，所以多个目标及
+不同 SSH 端口可以并行存在。
 
 远程恢复会安装 `tdl`。请先进入 tmux，再运行 `tdl codex`；它会在当前目录创建或复用 `remote-dev` tmux 会话中的
 三 pane `codex` 工作窗口：左上运行 `nvim .`，右上运行 `tcodex`/官方 `codex`，下方保留
@@ -204,6 +216,7 @@ rdo ./report.md
 tssh put ./report.pdf user@host
 tssh put ./a.txt ./b.txt user@host
 tssh put -r ./docs user@host
+tssh put -p 30112 ./report.pdf root@sh02-ssh.gpuhome.cc
 tssh put './reports/*.pdf' user@host -i ~/.ssh/id_ed25519
 ```
 
@@ -282,14 +295,14 @@ lease_ttl = 3
 `lease_ttl` 必须大于两个 heartbeat 间隔；无效值会回退到默认值。该配置只包含时序参数，
 不保存密码、私钥或代理凭据。
 
-也可以从 [v0.1.33 Release](https://github.com/zylona/re_remote_dev/releases/tag/v0.1.33) 下载完整本地集成制品。生产环境建议固定版本并校验 SHA256：
+也可以从 [v0.1.34 Release](https://github.com/zylona/re_remote_dev/releases/tag/v0.1.34) 下载完整本地集成制品。生产环境建议固定版本并校验 SHA256：
 
 ```bash
-curl -fLO https://github.com/zylona/re_remote_dev/releases/download/v0.1.33/remote-dev-orchestrator-v0.1.33-linux.tar.gz
-curl -fLO https://github.com/zylona/re_remote_dev/releases/download/v0.1.33/remote-dev-orchestrator-v0.1.33-linux.tar.gz.sha256
-sha256sum -c remote-dev-orchestrator-v0.1.33-linux.tar.gz.sha256
-tar -xzf remote-dev-orchestrator-v0.1.33-linux.tar.gz
-./remote-dev-orchestrator-v0.1.33-linux/install
+curl -fLO https://github.com/zylona/re_remote_dev/releases/download/v0.1.34/remote-dev-orchestrator-v0.1.34-linux.tar.gz
+curl -fLO https://github.com/zylona/re_remote_dev/releases/download/v0.1.34/remote-dev-orchestrator-v0.1.34-linux.tar.gz.sha256
+sha256sum -c remote-dev-orchestrator-v0.1.34-linux.tar.gz.sha256
+tar -xzf remote-dev-orchestrator-v0.1.34-linux.tar.gz
+./remote-dev-orchestrator-v0.1.34-linux/install
 ```
 
 安装器会迁移并备份旧版 `# >>> remote-dev ssh integration >>>` 标记区块，但默认不再写入全局

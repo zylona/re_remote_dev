@@ -74,6 +74,7 @@ class ReverseProxyTunnel:
         settings: ProxySettings,
         destination: str,
         identity_file: str | Path | None,
+        port: int = 22,
         auth_password: str | None = None,
         ssh_bin: str = "ssh",
         remote_port: int | None = None,
@@ -81,6 +82,9 @@ class ReverseProxyTunnel:
     ) -> None:
         self.settings = settings
         self.destination = destination
+        if not 1 <= port <= 65535:
+            raise ValueError("SSH 端口必须位于 1..65535")
+        self.port = port
         self.identity_file = str(identity_file) if identity_file is not None else None
         self.auth_password = auth_password
         self.ssh_bin = ssh_bin
@@ -94,6 +98,8 @@ class ReverseProxyTunnel:
 
     def command(self) -> list[str]:
         command = [self.ssh_bin, "-N", "-T"]
+        if self.port != 22:
+            command.extend(["-p", str(self.port)])
         if self.identity_file and self.identity_file != "/dev/null":
             command.extend(["-F", "/dev/null"])
         elif self.auth_password is not None:
