@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.1.37]
+
+- 修复 GitHub Release 构建在干净源码归档中因顶层空 `templates/` 目录不存在而失败的问题。
+
+
 ## [0.1.36]
 
 - 修复在 GitHub Actions 彩色终端环境下 CLI 帮助测试受 ANSI 控制码影响而失败的问题。

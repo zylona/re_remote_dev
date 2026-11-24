@@ -27,7 +27,10 @@ uv pip install --python "$python_bin" --target "$product/lib/python/site-package
   --requirements "$stage_dir/runtime-requirements.txt"
 
 cp -R "$root_dir/src/remote_dev/." "$product/lib/remote_dev/"
-cp -R "$root_dir/playbooks" "$root_dir/roles" "$root_dir/templates" "$product/"
+cp -R "$root_dir/playbooks" "$root_dir/roles" "$product/"
+if [[ -d "$root_dir/templates" ]]; then
+  cp -R "$root_dir/templates" "$product/"
+fi
 mkdir -p "$product/systemd" "$product/scripts"
 cp "$root_dir/systemd/tssh.service" "$root_dir/systemd/tssh.socket" "$product/systemd/"
 cp "$root_dir/scripts/remote_dev_ssh_hook.py" "$root_dir/scripts/remote_preview_helper.py" "$root_dir/scripts/tdl" "$product/scripts/"

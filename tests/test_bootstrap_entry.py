@@ -78,6 +78,12 @@ def test_release_builder_bundles_every_shell_helper_installed_by_the_role():
     assert '"$root_dir/scripts/remote_preview_helper.py"' in builder
 
 
+def test_release_builder_does_not_require_untracked_top_level_templates_directory():
+    builder = Path("scripts/build_orchestrator_release.sh").read_text(encoding="utf-8")
+    assert 'if [[ -d "$root_dir/templates" ]]; then' in builder
+    assert 'cp -R "$root_dir/templates" "$product/"' in builder
+
+
 def test_setup_uses_one_existing_sudo_user_and_never_provisions_accounts(monkeypatch, tmp_path: Path):
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr("remote_dev.cli._install_local_orchestrator", lambda **_kwargs: None)
