@@ -14,22 +14,22 @@
 
 ## 登录实现（参考 re_debian）
 
-目标设备必须预先配置与执行端匹配的 SSH 公钥；连接用户必须是具备 sudo 权限的目标用户。本项目不负责密码引导、公钥下发、软件安装或本地密码管理。
+目标设备必须预先存在一个具备 sudo 权限的目标用户。本项目不负责创建用户、改动用户密码、授予 sudo 或下发 SSH 公钥。`setup` 支持密钥和密码两种 SSH 认证；留空私钥路径时复用本机 SSH 配置/ssh-agent。
 
-- `ansible_user` 定义 SSH 登录用户，`remote_dev.target_user` 定义最终配置用户；两者不同的切换必须由用户预先保证权限和公钥。
-- `setup` 收集的 SSH 端口会同步用于 SSH 提权探测、临时反向代理隧道和生成的 `ansible_port`，并参与目标身份摘要；不会只让登录走自定义端口而让后续阶段回退到 `22`。
+- `ansible_user` 与 `remote_dev.target_user` 必须指向同一个已存在的目标用户。
+- `setup` 收集的 SSH 端口会同步用于临时反向代理隧道和生成的 `ansible_port`，并参与目标身份摘要；不会只让登录走自定义端口而让后续阶段回退到 `22`。
 - `tssh`、`put`、`persist`、`stop` 和 `reclaim` 通过 `ssh -G` 解析 SSH 别名对应的有效 `HostName`、`User`、`Port` 和 `IdentityFile`。省略 `-p` 时服从 `~/.ssh/config`，显式 `-p` 覆盖配置；编排器以解析后的主机和端口区分 endpoint。
 - `remote_dev.ssh_private_key_file` 或主机级 `ansible_ssh_private_key_file` 指向执行端私钥。私钥内容不复制到仓库、不上传目标机。
 - 严格校验 SSH host key；连接失败直接报告，不尝试密码 fallback。
-- 项目不维护 `.local/credentials.yml`；sudo 密码只通过 Ansible `--ask-become-pass` 在 TTY 中交互输入。
-- 目标机和执行端均不需要 sshpass。
+- 项目不维护 `.local/credentials.yml`；SSH 密码由 setup 临时收集，通过权限为 `0600` 的短期凭据文件交给 Ansible，结束后删除。sudo 密码只通过 Ansible `--ask-become-pass` 在 TTY 中输入。
+- 密码 SSH 需要执行端 `sshpass`；密钥认证不需要。
 - tmux 是 fallback 组件，必须由用户预先安装；项目只部署其用户级配置，不负责跨发行版安装。
 - 当探测到 TCP forwarding 被禁用且代理模式为 `required`/自动启用时，脚本创建 `/etc/ssh/sshd_config.d/99-remote-dev-forwarding.conf`，写入 `AllowTcpForwarding yes`，同时支持代理 `-R 4227` 和临时 Codex OAuth 回调 `-L 1455`；先执行 `sshd -t` 校验，再 reload sshd；失败时恢复备份并报告 `FORWARDING_DISABLED`。
 - 普通 SSH 会话不再自动配置任何转发。远端 `rd-help proxy` 根据 `SSH_CONNECTION` 实时打印本机一次性后台 `ssh -fNT -R 4227...` 命令，可被同一主机的多个会话复用；`rd-help codex` 另行打印一次性的 OAuth `-L 1455` 命令。
 - `tssh user@host` 会把本轮已建立的 4227 代理以环境变量注入远端登录 shell（同时设置大小写两套
   `HTTP_PROXY/HTTPS_PROXY`），因此 Nvim、Git、Treesitter 等子进程直接继承代理；这不写入远端
   配置文件，也不改变普通 `ssh` 或 VS Code Remote-SSH 的行为。
-- 提权流程为交互式：验证目标用户存在 sudo 且可通过 `--ask-become-pass` 提权。sudo 不存在或不可用时，明确列出缺失能力并停止。密码只驻留内存。
+- 用户负责确认目标用户已有 sudo 权限；setup 只使用用户提供的 sudo 密码，不创建用户或修改授权。sudo 缺失、授权不足或密码错误时，Ansible 失败并停止。
 
 ## 运行时契约
 

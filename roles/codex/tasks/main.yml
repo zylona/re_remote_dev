@@ -44,6 +44,7 @@
     - codex_real_binary != codex_shim
     - not codex_real_before.stat.exists
     - codex_legacy_before.stat.exists
+    - not (codex_legacy_before.stat.islnk | default(false))
   changed_when: true
 
 - name: 确保 Codex 本地配置文件存在
@@ -132,9 +133,15 @@
 
 - name: 使用 mise 安装完整 Codex package
   ansible.builtin.command:
-    argv: ["{{ codex_mise_path }}", install, "codex@{{ codex_mise_version }}"]
+    # Codex package is a large GitHub release artifact. Network failures may
+    # be transient even when the SSH reverse proxy is healthy; retain mise's
+    # integrity checks/retries and bound the whole install instead of leaving
+    # setup blocked indefinitely.
+    argv: [timeout, "900", "{{ codex_mise_path }}", install, --verbose, "codex@{{ codex_mise_version }}"]
   register: codex_mise_install
-  changed_when: codex_mise_install.rc == 0 and 'already installed' not in (codex_mise_install.stdout | default(''))
+  changed_when: >-
+    codex_mise_install.rc == 0 and
+    'already installed' not in ((codex_mise_install.stdout | default('')) ~ (codex_mise_install.stderr | default('')))
   failed_when: false
   when: codex_mise_probe.rc == 0
   environment:
@@ -144,6 +151,10 @@
     https_proxy: "{{ remote_dev_temp_proxy_url | default(omit) }}"
     HTTP_PROXY: "{{ remote_dev_temp_proxy_url | default(omit) }}"
     HTTPS_PROXY: "{{ remote_dev_temp_proxy_url | default(omit) }}"
+    MISE_HTTP_RETRIES: "8"
+    MISE_HTTP_TIMEOUT: 60s
+    MISE_HTTP_DOWNLOAD_TIMEOUT: 900s
+    MISE_VERBOSE: '1'
 
 - name: 获取 mise 管理的完整 Codex package 路径
   ansible.builtin.command:
@@ -182,20 +193,77 @@
     path: "{{ codex_real_binary }}"
   register: codex_binary
 
-- name: 下载官方 Codex 安装器
+- name: 检查官方 Codex 安装器缓存
+  ansible.builtin.stat:
+    path: "{{ codex_install_script }}"
+    checksum_algorithm: sha256
+  register: codex_installer_cached
   when:
     - not (codex_mise_package.stat.exists | default(false))
-  ansible.builtin.get_url:
-    url: "{{ codex_install_url }}"
-    dest: "{{ codex_install_script }}"
-    mode: '0700'
-    checksum: "{{ ('sha256:' ~ codex_install_sha256) if codex_install_sha256 | length > 0 else omit }}"
+
+- name: 通过 curl 下载官方 Codex 安装器
+  ansible.builtin.command:
+    argv:
+      - curl
+      - --fail
+      - --location
+      - --silent
+      - --show-error
+      - --retry
+      - "3"
+      - --retry-all-errors
+      - --connect-timeout
+      - "20"
+      - --max-time
+      - "300"
+      - --output
+      - "{{ codex_install_script }}.tmp"
+      - "{{ codex_install_url }}"
   register: codex_installer_download
+  changed_when: codex_installer_download.rc == 0
+  when:
+    - not (codex_mise_package.stat.exists | default(false))
+    - not (codex_installer_cached.stat.exists | default(false))
   environment:
     http_proxy: "{{ remote_dev_temp_proxy_url | default(omit) }}"
     https_proxy: "{{ remote_dev_temp_proxy_url | default(omit) }}"
     HTTP_PROXY: "{{ remote_dev_temp_proxy_url | default(omit) }}"
     HTTPS_PROXY: "{{ remote_dev_temp_proxy_url | default(omit) }}"
+
+- name: 校验已下载 Codex 安装器摘要
+  ansible.builtin.stat:
+    path: "{{ codex_install_script }}.tmp"
+    checksum_algorithm: sha256
+  register: codex_installer_downloaded
+  when:
+    - not (codex_mise_package.stat.exists | default(false))
+    - codex_installer_download.changed | default(false)
+
+- name: 校验固定 Codex 安装器 SHA256
+  ansible.builtin.assert:
+    that: codex_installer_downloaded.stat.checksum == codex_install_sha256
+    fail_msg: "Codex 安装器 SHA256 不匹配；拒绝执行下载文件。"
+  when:
+    - codex_install_sha256 | length > 0
+    - codex_installer_download.changed | default(false)
+
+- name: 发布已校验的 Codex 安装器缓存
+  ansible.builtin.command:
+    argv: [mv, "{{ codex_install_script }}.tmp", "{{ codex_install_script }}"]
+  register: codex_installer_publish
+  changed_when: codex_installer_publish.rc == 0
+  when:
+    - not (codex_mise_package.stat.exists | default(false))
+    - codex_installer_download.changed | default(false)
+
+- name: 确保 Codex 安装器缓存权限
+  ansible.builtin.file:
+    path: "{{ codex_install_script }}"
+    state: file
+    mode: '0700'
+  when:
+    - not (codex_mise_package.stat.exists | default(false))
+    - codex_installer_download.changed | default(false) or codex_installer_cached.stat.exists | default(false)
 
 - name: 执行官方 Codex 安装器
   ansible.builtin.command:

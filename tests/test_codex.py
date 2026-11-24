@@ -11,7 +11,10 @@ def test_codex_role_uses_official_staged_installer() -> None:
     tasks = (ROOT / "roles/codex/tasks/main.yml").read_text(encoding="utf-8")
     shim = (ROOT / "roles/codex/templates/codex-shim.sh.j2").read_text(encoding="utf-8")
     assert "https://chatgpt.com/codex/install.sh" in defaults
-    assert "ansible.builtin.get_url" in tasks
+    assert "通过 curl 下载官方 Codex 安装器" in tasks
+    assert "      - --retry-all-errors" in tasks
+    assert "      - \"300\"" in tasks
+    assert "发布已校验的 Codex 安装器缓存" in tasks
     assert "curl | sh" not in tasks
     assert "CODEX_NON_INTERACTIVE" in tasks
     assert "codex_mise_version" in defaults

@@ -2,9 +2,8 @@
 set -euo pipefail
 base="${XDG_DATA_HOME:-$HOME/.local/share}/tssh"
 legacy_base="${XDG_DATA_HOME:-$HOME/.local/share}/remote-dev-orchestrator"
-python_bin="${PYTHON:-python3}"
-if [ -d "$base/current/lib" ] && command -v "$python_bin" >/dev/null 2>&1; then
-  PYTHONPATH="$base/current/lib${PYTHONPATH:+:$PYTHONPATH}" "$python_bin" -c 'from remote_dev.ssh_integration import uninstall; print(f"SSH config integration removed: {uninstall()}")' || true
+if [ -x "$base/current/bin/tssh-python" ]; then
+  "$base/current/bin/tssh-python" -c 'from remote_dev.ssh_integration import uninstall; print(f"SSH config integration removed: {uninstall()}")' || true
 fi
 systemctl --user disable --now tssh.socket tssh.service remote-dev-orchestrator.socket remote-dev-orchestrator.service 2>/dev/null || true
 shopt -s nullglob

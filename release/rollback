@@ -15,7 +15,7 @@ unit_dir="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
 next_link="$base/.current.rollback.$$"
 ln -s "$target" "$next_link"
 mv -Tf "$next_link" "$base/current"
-sed "s#^ExecStart=.*#ExecStart=$base/current/bin/tssh-server#" \
+sed "s#^ExecStart=.*#ExecStart=$target/bin/tssh-server#" \
   "$target/tssh.service" > "$unit_dir/tssh.service"
 systemctl --user daemon-reload
 systemctl --user enable --now tssh.socket

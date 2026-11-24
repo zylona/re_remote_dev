@@ -62,7 +62,7 @@
     {% endif %}
     missing='';
     for p in {{ bootstrap_runtime_packages | join(' ') }}; do
-      case "$p" in python3) c="python3";; openssh-server) c="sshd";; bubblewrap) c="bwrap";; *) c="$p";; esac;
+      case "$p" in python3) c="python3";; openssh-server) c="sshd";; bubblewrap) c="bwrap";; acl) c="setfacl";; *) c="$p";; esac;
       if [ "$p" = ca-certificates ]; then
         test -f /etc/ssl/certs/ca-bundle.crt || test -f /etc/ssl/certs/ca-certificates.crt || missing="$missing $p";
       else
@@ -84,15 +84,3 @@
   changed_when: "'remote-dev-runtime-ready' not in bootstrap_runtime_install.stdout"
 - name: 重置连接以加载新安装的 Python
   ansible.builtin.meta: reset_connection
-
-- name: 为目标用户配置 sudoers（sudo 初始不存在时）
-  ansible.builtin.copy:
-    content: "{{ remote_dev.target_user }} ALL=(ALL:ALL) ALL\n"
-    dest: "/etc/sudoers.d/remote-dev-{{ remote_dev.target_user }}"
-    owner: root
-    group: root
-    mode: '0440'
-    validate: '/usr/sbin/visudo -cf %s'
-  become: true
-  when:
-    - ansible_become_method | default('sudo') == 'su'

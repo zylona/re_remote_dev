@@ -171,7 +171,6 @@
               # Python user agent (the real curl client is accepted).
               "User-Agent": "curl/8.0 (remote-dev compatibility)",
               "Accept": "*/*",
-              "Accept-Encoding": "gzip, deflate",
           },
       )
       with opener.open(request, timeout=180) as response:
@@ -221,6 +220,10 @@
   register: tools_controller_mise
   delegate_to: localhost
   become: false
+- name: 检查目标端现有 mise 二进制
+  ansible.builtin.stat:
+    path: "{{ tools_install_dir }}/mise"
+  register: tools_target_mise
 - name: 使用控制端 mise 二进制作为下载失败回退
   ansible.builtin.copy:
     src: "{{ tools_controller_mise_path }}"
@@ -229,17 +232,25 @@
   when:
     - not (tools_offline | bool)
     - tools_controller_mise.stat.exists | default(false)
-    - not (tools_install_dir + '/mise') is file
+    - not tools_target_mise.stat.exists
 - name: 使用 mise 官方安装脚本
   when:
     - not (tools_offline | bool)
     - not (tools_controller_mise.stat.exists | default(false))
+    - not tools_target_mise.stat.exists
   ansible.builtin.command:
     argv: [sh, "{{ tools_cache_dir }}/mise-install.sh"]
   changed_when: true
   environment:
     HOME: "{{ ansible_facts.user_dir }}"
     MISE_INSTALL_PATH: "{{ tools_install_dir }}/mise"
+    # Pin the official release so a fresh bootstrap does not depend on the
+    # installer's age-filtered release index being available through a proxy.
+    MISE_VERSION: "{{ tools_mise_version }}"
+    # mise.jdx.dev may serve a stale/corrupt archive while GitHub's release
+    # checksum is current. Download the archive from the same GitHub release
+    # that supplies SHASUMS256.txt so a valid release is not rejected.
+    MISE_INSTALL_FROM_GITHUB: "1"
     PATH: "{{ tools_curl_bin }}:{{ ansible_facts.user_dir }}/.local/bin:/usr/local/bin:/usr/bin:/bin"
     http_proxy: "{{ remote_dev_temp_proxy_url | default(omit) }}"
     https_proxy: "{{ remote_dev_temp_proxy_url | default(omit) }}"
@@ -363,6 +374,10 @@
     - tools_gpu_python_tool | length > 0
     - tools_gpu_available | bool
     - tools_gpustat_install.rc | default(0) | int != 0
+- name: 检查目标端现有 zoxide 二进制
+  ansible.builtin.stat:
+    path: "{{ tools_install_dir }}/zoxide"
+  register: tools_target_zoxide
 - name: 检查控制端现有 zoxide 二进制
   ansible.builtin.stat:
     path: "{{ tools_controller_zoxide_path }}"
@@ -377,11 +392,12 @@
   when:
     - not (tools_offline | bool)
     - tools_controller_zoxide.stat.exists | default(false)
-    - not (tools_install_dir + '/zoxide') is file
+    - not tools_target_zoxide.stat.exists | default(false)
 - name: 下载 zoxide 官方安装脚本（Python HTTPS 客户端）
   when:
     - not (tools_offline | bool)
     - not (tools_controller_zoxide.stat.exists | default(false))
+    - not (tools_target_zoxide.stat.exists | default(false))
   ansible.builtin.get_url:
     url: https://raw.githubusercontent.com/ajeetdsouza/zoxide/main/install.sh
     dest: "{{ tools_controller_cache_dir }}/zoxide-install.sh"
@@ -405,10 +421,12 @@
   when:
     - not (tools_offline | bool)
     - not (tools_controller_zoxide.stat.exists | default(false))
+    - not (tools_target_zoxide.stat.exists | default(false))
 - name: 使用 zoxide 官方安装脚本
   when:
     - not (tools_offline | bool)
     - not (tools_controller_zoxide.stat.exists | default(false))
+    - not (tools_target_zoxide.stat.exists | default(false))
   ansible.builtin.command:
     argv: [sh, "{{ tools_cache_dir }}/zoxide-install.sh"]
   changed_when: true

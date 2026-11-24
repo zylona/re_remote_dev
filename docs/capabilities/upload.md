@@ -1,6 +1,6 @@
-# `tssh put` 上传能力
+# `tssh --put` 上传能力
 
-`tssh put` 是与 `rget`/`rdo` 配套的低频文件上传入口。它只负责把本地文件放到
+`tssh --put` 是与 `rget`/`rdo` 配套的低频文件上传入口。它只负责把本地文件放到
 目标用户的约定目录，不改变远端项目配置，也不依赖远端安装额外的常驻 Agent。
 
 上传侧已经支持多个文件、通配符和递归目录；`rget` 的批量下载用法见
@@ -9,10 +9,10 @@
 ## 使用
 
 ```bash
-tssh put ./report.pdf user@host
-tssh put ./a.txt ./b.txt user@host
-tssh put -r ./docs user@host
-tssh put './reports/*.pdf' user@host -i ~/.ssh/id_ed25519
+tssh --put ./report.pdf user@host
+tssh --put ./a.txt ./b.txt user@host
+tssh --put -r ./docs user@host
+tssh --put './reports/*.pdf' user@host -i ~/.ssh/id_ed25519
 ```
 
 文件会写入目标用户的：

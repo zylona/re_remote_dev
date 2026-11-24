@@ -28,6 +28,26 @@ def test_shell_role_installs_remote_preview_helpers():
     assert "dest: \"{{ user_shell_home }}/.local/bin/rdo\"" in text
 
 
+def test_mise_bootstrap_uses_a_pinned_official_release():
+    text = (ROOT / "roles/tools/tasks/main.yml").read_text()
+    defaults = (ROOT / "roles/tools/defaults/main.yml").read_text()
+    assert 'MISE_VERSION: "{{ tools_mise_version }}"' in text
+    assert 'MISE_INSTALL_FROM_GITHUB: "1"' in text
+    assert 'tools_mise_version: "v2026.11.8"' in defaults
+
+
+def test_mise_controller_fallback_checks_the_remote_target_path():
+    text = (ROOT / "roles/tools/tasks/main.yml").read_text()
+    assert "register: tools_target_mise" in text
+    assert "not tools_target_mise.stat.exists" in text
+    assert "not (tools_install_dir + '/mise') is file" not in text
+
+
+def test_python_curl_wrapper_does_not_request_undecoded_compressed_responses():
+    text = (ROOT / "roles/tools/tasks/main.yml").read_text()
+    assert '"Accept-Encoding": "gzip, deflate"' not in text
+
+
 def test_nvim_role_installs_remote_preview_mapping():
     task_text = (ROOT / "roles/nvim/tasks/main.yml").read_text()
     mapping = (ROOT / "roles/nvim/files/config/lua/plugins/remote-preview.lua").read_text()
@@ -63,4 +83,4 @@ def test_cli_defines_run_scoped_logging_and_apply_tunnel():
     text = (ROOT / "src/remote_dev/cli.py").read_text()
     assert "RUN_ID" in text
     assert "ReverseProxyTunnel" in text
-    assert ".local/runs" in text
+    assert '"tssh" / "runs" / RUN_ID' in text

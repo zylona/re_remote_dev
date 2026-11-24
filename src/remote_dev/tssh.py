@@ -21,14 +21,14 @@ from pathlib import Path
 from typing import Any
 
 try:
-    from .lease_config import load as load_lease_settings
+    from .lease_config import ProxyEndpoint, load as load_lease_settings, load_proxy, save_proxy
     from .file_transfer import EndpointIdentity
     from .download import DownloadManager, EndpointConnection
     from .preview_bridge import PreviewBridge, new_context
     from .upload import UploadConnection, UploadError, expand_upload_sources, put_files
     from .tssh_reclaim import ReclaimCandidate, format_elapsed, parse_scan, remote_command as reclaim_remote_command
 except ImportError:  # Direct ``python src/remote_dev/tssh.py`` development entrypoint.
-    from remote_dev.lease_config import load as load_lease_settings
+    from remote_dev.lease_config import ProxyEndpoint, load as load_lease_settings, load_proxy, save_proxy
     from remote_dev.file_transfer import EndpointIdentity
     from remote_dev.download import DownloadManager, EndpointConnection
     from remote_dev.preview_bridge import PreviewBridge, new_context
@@ -200,6 +200,11 @@ def _endpoint_digest(host: str, port: int) -> str:
 
 def _status() -> int:
     try:
+        local_proxy = load_proxy()
+    except ValueError as exc:
+        print(f"tssh --list: {exc}", file=sys.stderr)
+        return 2
+    try:
         result = _request({"op": "status"}, 5)
     except (OSError, TimeoutError, ValueError, ConnectionError) as exc:
         print(f"tssh: 本地编排器不可用：{exc}", file=sys.stderr)
@@ -208,6 +213,68 @@ def _status() -> int:
         print(f"tssh: 状态查询失败：{result.get('error', 'unknown')}", file=sys.stderr)
         return 1
     endpoints = result.get("endpoints", [])
+    try:
+        from rich import box
+        from rich.console import Console
+        from rich.panel import Panel
+        from rich.table import Table
+        from rich.text import Text
+
+        table = Table(box=box.SIMPLE_HEAVY, expand=True, header_style="bold cyan", border_style="blue")
+        table.add_column("HOST", style="bold white")
+        table.add_column("SSH", justify="right", style="white")
+        table.add_column("TYPE", style="magenta")
+        table.add_column("STATE")
+        table.add_column("OWNER")
+        table.add_column("SESSIONS", justify="right")
+        table.add_column("FORWARD")
+        if not endpoints:
+            table.add_row("—", "—", "—", Text("IDLE", style="dim"), "—", "0", "无活跃代理租约")
+        for item in endpoints:
+            endpoint = item.get("endpoint", {})
+            host = str(endpoint.get("hostname", "?"))
+            port = str(endpoint.get("port", "?"))
+            mode = str(item.get("mode", "SESSION"))
+            state = str(item.get("state", "?"))
+            state_color = "green" if state == "READY" else "yellow" if state == "DEGRADED" else "red"
+            table.add_row(
+                host,
+                port,
+                mode,
+                Text(state, style=state_color),
+                str(item.get("owner") or "—"),
+                str(int(item.get("session_count", 0))),
+                f"digest {str(item.get('endpoint_digest', ''))[:12]}",
+            )
+            forwards = item.get("forwards")
+            if not isinstance(forwards, list):
+                # Compatibility with an older orchestrator response.
+                forwards = [
+                    {"kind": "proxy", "remote_port": 4227, "local_port": local_proxy.port, "state": state},
+                    {"kind": "event", "remote_port": 4228, "local_port": 4230, "state": state},
+                ]
+            for forward in forwards:
+                if not isinstance(forward, dict):
+                    continue
+                forward_state = str(forward.get("state", state))
+                forward_color = "green" if forward_state == "READY" else "yellow" if forward_state == "DEGRADED" else "red"
+                remote = f"127.0.0.1:{forward.get('remote_port', '?')}"
+                local = f"127.0.0.1:{forward.get('local_port', '?')}"
+                table.add_row(
+                    "", "", f"↳ {forward.get('kind', 'forward')}",
+                    Text(forward_state, style=forward_color), "", "", f"remote {remote}  ←  local {local}",
+                )
+        legend = (
+            f"代理来源：http://{local_proxy.host}:{local_proxy.port}  ·  "
+            "remote 是目标端监听，local 是本机端口；tssh 不探测代理连通性。"
+        )
+        console = Console()
+        console.print(Panel(table, title="tssh · 活跃转发", border_style="blue", padding=(0, 1)))
+        console.print(Text(legend, style="dim"))
+        return 0
+    except ImportError:
+        pass
+
     print("tssh endpoint status")
     print("─" * 112)
     print(f"{'HOST':<28} {'SSH PORT':>8}  {'TYPE':<10} {'STATE':<10} {'OWNER':<16} {'SESSIONS':>8}  {'DIGEST':<12}")
@@ -224,7 +291,7 @@ def _status() -> int:
             # Compatibility with an older orchestrator response.  These are
             # the two forwards created by the managed endpoint unit.
             forwards = [
-                {"kind": "proxy", "remote_port": 4227, "local_port": 4227, "state": item.get("state", "?")},
+                {"kind": "proxy", "remote_port": 4227, "local_port": local_proxy.port, "state": item.get("state", "?")},
                 {"kind": "event", "remote_port": 4228, "local_port": 4230, "state": item.get("state", "?")},
             ]
         for index, forward in enumerate(forwards):
@@ -237,7 +304,7 @@ def _status() -> int:
             state = str(forward.get("state", item.get("state", "?")))
             print(f"{'':<28} {'':>8}  {branch} {kind:<8} remote {remote:<21} ← local {local:<18} {state}")
     print("─" * 112)
-    print("说明：remote 是目标设备上的监听端口；local 是本机端口。proxy=4227 代理，event=4228→本机4230 回调通道。")
+    print(f"说明：remote 是目标设备上的监听端口；local 是本机端口。proxy=4227 代理（本机 {local_proxy.host}:{local_proxy.port}），event=4228→本机4230 回调通道。")
     return 0
 
 
@@ -271,6 +338,50 @@ def _downloads_status() -> int:
     print("─" * 116)
     print("说明：rget/rdo 通常会在当前命令中显示进度并等待完成；状态文件位于 ~/.cache/tssh/rdo/*/jobs/。")
     return 0
+
+
+def _proxy_config(raw: list[str]) -> int:
+    parser = argparse.ArgumentParser(
+        prog="tssh --proxy",
+        description="查看或设置本机 HTTP 代理转发的来源地址；不会探测代理是否可用。",
+    )
+    parser.add_argument("action", nargs="?", choices=("show", "set"), default="show")
+    parser.add_argument("host", nargs="?")
+    parser.add_argument("port", nargs="?", type=int)
+    args = parser.parse_args(raw)
+    if args.action == "show":
+        if args.host is not None or args.port is not None:
+            parser.error("show 不接受地址参数")
+        try:
+            endpoint = load_proxy()
+        except ValueError as exc:
+            print(f"tssh --proxy: {exc}", file=sys.stderr)
+            return 2
+        print(f"本机代理：http://{endpoint.host}:{endpoint.port}")
+        print(f"配置文件：{Path(os.environ.get('XDG_CONFIG_HOME', Path.home() / '.config')) / 'tssh' / 'config'}")
+        print("代理可用性由用户负责；tssh 不进行连通性检查。")
+        return 0
+    if args.host is None or args.port is None:
+        parser.error("set 用法：tssh --proxy set HOST PORT")
+    try:
+        endpoint = ProxyEndpoint(args.host, args.port)
+        path = save_proxy(endpoint)
+    except ValueError as exc:
+        parser.error(str(exc))
+    print(f"已设置本机代理：http://{endpoint.host}:{endpoint.port}")
+    print(f"配置文件：{path}")
+    print("tssh 不会测试代理连通性；新连接和后续 setup 将使用此地址。")
+    return 0
+
+
+def _setup() -> int:
+    """Run the bundled environment-restoration CLI in the same Python runtime."""
+    command = [sys.executable, "-m", "remote_dev", "setup"]
+    try:
+        return subprocess.run(command, check=False).returncode
+    except OSError as exc:
+        print(f"tssh --setup: 无法启动内置恢复运行时：{exc}", file=sys.stderr)
+        return 1
 
 
 def _service_path() -> Path:
@@ -591,23 +702,43 @@ def _resolve_ssh_target(
 
 def main(argv: list[str] | None = None) -> int:
     raw_argv = list(argv if argv is not None else os.sys.argv[1:])
-    if not raw_argv or raw_argv == ["help"] or raw_argv == ["--help"]:
-        print("用法：tssh [-p SSH_PORT] [-i KEY] user@host [SSH 参数]\n       tssh user@host [-p SSH_PORT] [-i KEY] [SSH 参数]\n\n未指定 -p 时，使用 SSH config 解析出的 HostName、User、Port 和 IdentityFile。\n显式 -p 会覆盖该目标配置的端口。\n\n管理命令：\n  tssh list                                      查看代理 endpoint\n  tssh downloads                                 查看 rget/rdo 下载进度\n  tssh put [-r] SOURCE... user@host [-p PORT]    上传文件/目录到 ~/Uploads/remote-dev\n  tssh persist user@host [-p PORT] [-i KEY]      后台持久保持代理\n  tssh stop user@host [-p PORT]                 关闭指定持久代理\n  tssh cleanup                                  清理本机所有会话级代理 lease\n  tssh reclaim user@host [-p PORT] [--dry-run]   扫描远端 4227/4228 残留 SSH 转发\n  tssh reclaim user@host [-p PORT] [--yes]       确认后回收可识别的无终端转发会话\n  tssh --version                                查看版本")
+    if not raw_argv or raw_argv == ["--help"]:
+        try:
+            from .tssh_help import print_help
+        except ImportError:  # Direct ``python src/remote_dev/tssh.py`` development entrypoint.
+            from remote_dev.tssh_help import print_help
+
+        print_help()
         return 0
-    if raw_argv[0] == "list":
-        return _status()
-    if raw_argv[0] in {"downloads", "download-status"}:
-        return _downloads_status()
-    if raw_argv[0] == "put":
-        return _put(raw_argv)
-    if raw_argv[0] == "persist":
-        return _persist(raw_argv)
-    if raw_argv[0] == "stop":
-        return _persist(raw_argv, stop=True)
-    if raw_argv[0] == "reclaim":
-        return _reclaim(raw_argv)
-    if raw_argv == ["cleanup"] or raw_argv == ["clear"]:
-        return _cleanup()
+    if raw_argv[0] == "--version":
+        print(f"tssh {_version()}")
+        return 0
+    management = {
+        "--list": lambda rest: _status() if not rest else 2,
+        "--downloads": lambda rest: _downloads_status() if not rest else 2,
+        "--cleanup": lambda rest: _cleanup() if not rest else 2,
+        "--setup": lambda rest: _setup() if not rest else 2,
+    }
+    if raw_argv[0] in management:
+        if len(raw_argv) > 1:
+            print(f"tssh {raw_argv[0]} 不接受额外参数；运行 tssh --help 查看用法。", file=sys.stderr)
+            return 2
+        return management[raw_argv[0]](raw_argv[1:])
+    if raw_argv[0] == "--proxy":
+        return _proxy_config(raw_argv[1:])
+    if raw_argv[0] in {"--put", "--persist", "--stop", "--reclaim"}:
+        operation = raw_argv[0][2:]
+        normalized = [operation, *raw_argv[1:]]
+        if operation == "put":
+            return _put(normalized)
+        if operation == "persist":
+            return _persist(normalized)
+        if operation == "stop":
+            return _persist(normalized, stop=True)
+        return _reclaim(normalized)
+    if raw_argv[0].startswith("--") and raw_argv[0] not in {"--port", "--identity"}:
+        print(f"tssh: 未知管理命令 {raw_argv[0]}；运行 tssh --help 查看有效命令。", file=sys.stderr)
+        return 2
     parser = argparse.ArgumentParser(prog="tssh", description="使用 remote-dev 4227 转发连接 SSH 目标")
     parser.add_argument("--version", action="version", version=f"%(prog)s {_version()}")
     parser.add_argument("destination", help="SSH 目标，格式为 user@host 或 host")

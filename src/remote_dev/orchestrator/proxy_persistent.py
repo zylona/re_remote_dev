@@ -77,10 +77,12 @@ def unit_text(
     *,
     event_forward: bool = True,
     proxy_forward: bool = True,
+    local_proxy_host: str = "127.0.0.1",
+    local_proxy_port: int = 4227,
 ) -> str:
     forwards: list[str] = []
     if proxy_forward:
-        forwards.extend(["-R", "127.0.0.1:4227:127.0.0.1:4227"])
+        forwards.extend(["-R", f"127.0.0.1:4227:{local_proxy_host}:{local_proxy_port}"])
     if event_forward:
         forwards.extend(["-R", "127.0.0.1:4228:127.0.0.1:4230"])
     command = shlex.join([
@@ -116,12 +118,21 @@ def ensure(
     *,
     event_forward: bool = True,
     proxy_forward: bool = True,
+    local_proxy_host: str = "127.0.0.1",
+    local_proxy_port: int = 4227,
     systemd_dir: Path | None = None,
 ) -> Path:
     directory = systemd_dir or (Path.home() / ".config/systemd/user")
     directory.mkdir(parents=True, exist_ok=True, mode=0o700)
     path = unit_path(target, systemd_dir=directory)
-    content = unit_text(target, identity, event_forward=event_forward, proxy_forward=proxy_forward)
+    content = unit_text(
+        target,
+        identity,
+        event_forward=event_forward,
+        proxy_forward=proxy_forward,
+        local_proxy_host=local_proxy_host,
+        local_proxy_port=local_proxy_port,
+    )
     changed = not path.exists() or path.read_text(encoding="utf-8") != content
     active = subprocess.run(["systemctl", "--user", "is-active", "--quiet", path.name], check=False).returncode == 0
     path.write_text(content, encoding="utf-8")

@@ -163,7 +163,7 @@ reverse-forward 的远端端口发布与远端 helper 放在 P2 一起接入，�
 7. 每个 endpoint 限制活动传输数，防止多个大文件拖慢 SSH 输入。
 8. 远端请求保持当前命令连接，bridge 按 200ms 节奏回传进度；完成后发送最终状态，
    `rdo` 再启动本地查看器。
-9. 状态写入 `~/.cache/tssh/rdo/*/jobs/`，可用 `tssh downloads` 查看仍在运行或最近完成的任务。
+9. 状态写入 `~/.cache/tssh/rdo/*/jobs/`，可用 `tssh --downloads` 查看仍在运行或最近完成的任务。
 10. 默认不执行昂贵 fsync；`--durable` 才保证持久化语义。
 11. 使用稳定 `.part` 文件和 SFTP `get -a` 断点续传；远程大小或 mtime 变化时丢弃旧分片。
 12. 支持超时、进度、失败重试和 `.part` 保留；Ctrl-C 不会损坏已完成的旧文件。
@@ -179,7 +179,7 @@ reverse-forward 的远端端口发布与远端 helper 放在 P2 一起接入，�
 当前实现：本地 `DownloadManager` 使用系统 OpenSSH 的 `ssh`/`sftp` 客户端，默认
 最多两个 worker；同一 endpoint+路径的活动任务合并，完成后写入 SHA256 sidecar。
 bridge 在当前命令连接上流式回传进度，SFTP 使用 `get -a` 复用 `.part` 断点，完成后
-原子替换；`tssh downloads` 提供脱离当前终端的状态查看。
+原子替换；`tssh --downloads` 提供脱离当前终端的状态查看。
 
 ## 8. P4：Nvim `<S-o>` 和本地应用
 

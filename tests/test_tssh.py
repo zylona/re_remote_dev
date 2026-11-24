@@ -49,19 +49,23 @@ def test_tssh_resolves_effective_ssh_config_host_user_and_port(monkeypatch):
 
 def test_tssh_cleanup_command(monkeypatch, capsys):
     monkeypatch.setattr(tssh, "_request", lambda payload, timeout: {"ok": True, "cleaned_endpoints": 2})
-    assert tssh.main(["cleanup"]) == 0
+    assert tssh.main(["--cleanup"]) == 0
     assert "2" in capsys.readouterr().out
 
 
 def test_tssh_help_and_list_commands(monkeypatch, capsys):
-    assert tssh.main(["help"]) == 0
+    assert tssh.main(["--help"]) == 0
     output = capsys.readouterr().out
-    assert "persist" in output
-    assert "put [-r] SOURCE... user@host" in output
-    assert "tssh reclaim user@host" in output
+    assert "--persist" in output
+    assert "--put [-r] SOURCE... user@host" in output
+    assert "tssh --reclaim user@host" in output
+    assert "快速开始" in output
+    assert "使用前须知" in output
+    assert "sudo visudo" in output
+    assert "--tui" not in output
     monkeypatch.setattr(tssh, "_request", lambda payload, timeout: {"ok": True, "endpoints": []})
-    assert tssh.main(["list"]) == 0
-    assert "no active" in capsys.readouterr().out
+    assert tssh.main(["--list"]) == 0
+    assert "无活跃代理租约" in capsys.readouterr().out
 
 
 def test_tssh_list_shows_endpoint_ports_and_directions(monkeypatch, capsys):
@@ -83,7 +87,7 @@ def test_tssh_list_shows_endpoint_ports_and_directions(monkeypatch, capsys):
             }],
         },
     )
-    assert tssh.main(["list"]) == 0
+    assert tssh.main(["--list"]) == 0
     output = capsys.readouterr().out
     assert "host-a" in output
     assert "4227" in output
@@ -105,5 +109,25 @@ def test_tssh_list_shows_proxy_type(monkeypatch, capsys):
             "forwards": [{"kind": "proxy", "remote_port": 4227, "local_port": 4227, "state": "READY"}],
         }],
     })
-    assert tssh.main(["list"]) == 0
+    assert tssh.main(["--list"]) == 0
     assert "PERSISTENT" in capsys.readouterr().out
+
+
+def test_management_typo_is_not_treated_as_a_ssh_destination(capsys):
+    assert tssh.main(["--setpu"]) == 2
+    assert "未知管理命令" in capsys.readouterr().err
+
+
+def test_management_word_can_still_be_an_ssh_alias(monkeypatch):
+    called = []
+    target = tssh._ResolvedSSHTarget("real-list-host", "zylona", 22, None)
+
+    def resolve(*args):
+        called.append(args)
+        return target
+
+    monkeypatch.setattr(tssh, "_resolve_ssh_target", resolve)
+    # Prevent the dispatch test from reaching the orchestrator after parsing.
+    monkeypatch.setattr(tssh, "_request", lambda *_args, **_kwargs: {"ok": False, "error": "test stop"})
+    assert tssh.main(["list"]) == 1
+    assert called and called[0][0] == "list"

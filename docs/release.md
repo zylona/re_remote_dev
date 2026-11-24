@@ -49,16 +49,16 @@ tssh-server --help # 仅检查入口；服务由 systemd 启动
 tssh --help # 带 4227 转发的 SSH 入口
 tssh user@host # 自动使用 ~/.ssh/config 中解析出的 IdentityFile
 tssh -i ~/.ssh/id_ed25519 user@host # 显式指定密钥
-tssh list # 查看所有活动 endpoint
-tssh put ./report.pdf user@host # 上传到目标 ~/Uploads/remote-dev/
-tssh put ./a.txt ./b.txt user@host # 一次上传多个文件
-tssh put -r ./docs user@host # 递归上传并保留 docs/ 目录
-tssh persist user@host # 后台持久保持代理，不占用终端
-tssh stop user@host # 关闭指定持久代理
-tssh cleanup # 清理全部会话级代理
+tssh --list # 查看所有活动 endpoint
+tssh --put ./report.pdf user@host # 上传到目标 ~/Uploads/remote-dev/
+tssh --put ./a.txt ./b.txt user@host # 一次上传多个文件
+tssh --put -r ./docs user@host # 递归上传并保留 docs/ 目录
+tssh --persist user@host # 后台持久保持代理，不占用终端
+tssh --stop user@host # 关闭指定持久代理
+tssh --cleanup # 清理全部会话级代理
 ```
 
-`tssh list` 会展示每个 endpoint 的主机和 SSH 端口，并逐行列出实际转发：远端 `4227` 映射到
+`tssh --list` 会展示每个 endpoint 的主机和 SSH 端口，并逐行列出实际转发：远端 `4227` 映射到
 本机 `4227`（HTTP 代理），远端 `4228` 映射到本机 `4230`（Codex OAuth/事件通道）。状态表按
 主机分组，便于同时检查多个设备；`READY` 表示 endpoint 的转发单元已成功建立。
 
@@ -68,18 +68,18 @@ tssh cleanup # 清理全部会话级代理
 `tssh user@host` 会话按需启用。
 
 持久 unit 只在当前开机周期启动，不再 enable 到 `default.target`；关机时由 systemd 停止，
-下次开机必须重新执行 `tssh persist`。启动前会清理本机失效 unit 并探测远端 4227：健康监听
+下次开机必须重新执行 `tssh --persist`。启动前会清理本机失效 unit 并探测远端 4227：健康监听
 直接复用，疑似旧连接只报告 `REMOTE_PORT_BUSY`，不会无确认地杀掉未知 SSH 会话。
 
-`tssh put` 使用每次请求独立的临时 SSH ControlMaster，批量源文件复用同一连接；目录创建、
+`tssh --put` 使用每次请求独立的临时 SSH ControlMaster，批量源文件复用同一连接；目录创建、
 SFTP 上传和进度查询均复用该连接，完成或失败后自动关闭。目标文件统一写入
 `~/Uploads/remote-dev/`；存在匹配的 `.tssh-part` 时按已有大小续传，成功后原子替换正式文件。
 上传不使用 4227/4228，也不要求远端部署常驻 Agent。它依赖 SSH 配置、ssh-agent 或显式私钥，
 不保存密码；详细使用边界见 [`docs/capabilities/upload.md`](capabilities/upload.md)。
 
 普通会话默认每 1 秒续租；异常断开时，lease 最多保留约 3 秒以容忍瞬时网络抖动；需要立即停止全部会话级
-转发时使用 `tssh cleanup`。`persist` 创建的持久代理不受会话退出影响，必须使用对应的
-`tssh stop user@host` 显式关闭。
+转发时使用 `tssh --cleanup`。`persist` 创建的持久代理不受会话退出影响，必须使用对应的
+`tssh --stop user@host` 显式关闭。
 
 时序可以在 `~/.config/tssh/config` 中调整：
 

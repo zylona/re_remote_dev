@@ -3,8 +3,10 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import socket
 import subprocess
+import sys
 import threading
 import uuid
 import tempfile
@@ -17,70 +19,62 @@ import typer
 from rich.console import Console
 from ruamel.yaml import YAML
 
-app = typer.Typer(no_args_is_help=True, help="恢复和验证 SSH 远程开发环境")
+app = typer.Typer(
+    no_args_is_help=True,
+    help="""恢复和验证 SSH 远程开发环境。
+
+目标用户准备（setup 前置条件）
+先准备一个已存在、可 SSH 登录且有 sudo 权限的普通用户。项目不会创建用户、改密码或授予 sudo。
+
+Debian / Ubuntu（由 root 或现有管理员执行）：
+  apt-get update && apt-get install -y sudo   # sudo 尚未安装时执行
+  adduser <用户名>
+  usermod -aG sudo <用户名>
+
+RHEL / Rocky / AlmaLinux / openEuler：
+  dnf install -y sudo                       # sudo 尚未安装时执行
+  useradd -m -s /bin/bash <用户名>
+  passwd <用户名>
+  usermod -aG wheel <用户名>
+  visudo
+  确认 sudoers 中启用：%wheel ALL=(ALL:ALL) ALL
+
+Arch Linux：
+  pacman -S sudo                             # sudo 尚未安装时执行
+  useradd -m -s /bin/bash <用户名>
+  passwd <用户名>
+  usermod -aG wheel <用户名>
+  visudo
+  确认 sudoers 中启用：%wheel ALL=(ALL:ALL) ALL
+
+验证新用户：su - <用户名>，然后运行 sudo -v 和 sudo whoami（应输出 root）。
+运行 setup 时，此用户名就是 SSH 登录用户名和最终配置用户名。密钥路径可留空以复用本机 SSH 配置/ssh-agent；
+密码登录需要控制端安装 sshpass。sudo 密码由 Ansible 在终端中询问。""",
+)
 orchestrator_app = typer.Typer(no_args_is_help=True, help="管理本地 SSH/Codex 编排器")
 console = Console()
 RUN_ID = uuid.uuid4().hex[:12]
 _BOOTSTRAP_TARGET_DIGEST: str | None = None
 
 
-def _detect_become_method(destination: str, identity_file: str, port: int = 22) -> str:
-    """Choose the installed escalation path without consuming a password."""
-    probe = ["ssh"]
-    if port != 22:
-        probe.extend(["-p", str(port)])
-    probe.extend([
-        "-F", "/dev/null", "-i", str(Path(identity_file).expanduser()),
-        "-o", "BatchMode=yes", "-o", "ConnectTimeout=8", destination,
-        "sh", "-c", "'if command -v sudo >/dev/null 2>&1; then echo sudo; elif command -v su >/dev/null 2>&1; then echo su; else echo unavailable; fi'",
-    ])
-    result = subprocess.run(probe, check=False, capture_output=True, text=True, timeout=15)
-    if result.returncode != 0:
-        detail = (result.stderr or result.stdout or "SSH 连接失败").strip().splitlines()[-1]
-        raise RuntimeError(f"无法通过 SSH 探测目标提权能力：{detail}；请先确认用户名、私钥和 host key。")
-    method = result.stdout.strip().splitlines()[-1] if result.stdout.strip() else "unavailable"
-    if method not in {"sudo", "su"}:
-        raise RuntimeError("目标机没有可用的 sudo 或 su 提权通道；请提供 root 密码并确认 su 可执行。")
-    return method
+def _run_dir() -> Path:
+    cache_home = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache"))
+    return cache_home / "tssh" / "runs" / RUN_ID
 
 
-def _detect_become_for_setup(
-    destination: str,
-    identity_file: str | None,
-    auth_password: str | None = None,
-    port: int = 22,
-) -> str:
-    """Select sudo when installed and distinguish password-required from denial.
+def _project_root() -> Path:
+    """Return the source checkout or installed tssh bundle root."""
+    return Path(__file__).resolve().parents[2]
 
-    ``sudo -n`` returns non-zero both when a password is needed and when the
-    account is not authorized.  The former must still select sudo so Ansible
-    can prompt for the user's sudo password; only an explicit policy denial
-    falls back to ``su``.
-    """
-    command = ["ssh"]
-    if not 1 <= port <= 65535:
-        raise ValueError("SSH 端口必须位于 1..65535")
-    if port != 22:
-        command.extend(["-p", str(port)])
-    if identity_file:
-        command.extend(["-F", "/dev/null", "-i", str(Path(identity_file).expanduser())])
-    elif auth_password is not None:
-        # Password mode must not accidentally inherit IdentitiesOnly or other
-        # key-only rules from the user's global SSH config.
-        command.extend(["-F", "/dev/null"])
-    command.extend([
-        "-o", "ConnectTimeout=8", destination,
-        "sh", "-c", "'if ! command -v sudo >/dev/null 2>&1; then command -v su >/dev/null 2>&1 && echo su || echo unavailable; elif sudo -n true >/dev/null 2> /tmp/remote-dev-sudo-probe; then echo sudo; elif grep -qiE \"not in the sudoers|not allowed\" /tmp/remote-dev-sudo-probe; then command -v su >/dev/null 2>&1 && echo su || echo unavailable; else echo sudo; fi; rm -f /tmp/remote-dev-sudo-probe'",
-    ])
-    env = os.environ.copy()
-    if auth_password is not None:
-        command = ["sshpass", "-e", *command]
-        env["SSHPASS"] = auth_password
-    result = subprocess.run(command, check=False, capture_output=True, text=True, env=env, timeout=15)
-    method = result.stdout.strip().splitlines()[-1] if result.stdout.strip() else "unavailable"
-    if method not in {"sudo", "su"}:
-        raise RuntimeError("目标机没有可用的 sudo 或 su 提权通道。")
-    return method
+
+def _service_server_command(project_root: Path) -> str | None:
+    bundled = project_root / "bin/tssh-server"
+    if bundled.is_file():
+        return str(bundled)
+    source_entry = project_root / "re-remote"
+    if source_entry.is_file():
+        return f"{source_entry} orchestrator-server"
+    return None
 
 
 def _load_inventory(path: Path) -> dict[str, Any]:
@@ -93,7 +87,7 @@ def _load_inventory(path: Path) -> dict[str, Any]:
 
 
 def _log_event(event: str, **fields: Any) -> None:
-    run_dir = Path(".local/runs") / RUN_ID
+    run_dir = _run_dir()
     run_dir.mkdir(parents=True, exist_ok=True)
     record = {"ts": datetime.now(timezone.utc).isoformat(), "event": event, **fields}
     with (run_dir / "events.jsonl").open("a", encoding="utf-8") as stream:
@@ -119,16 +113,55 @@ def _validate(path: Path) -> dict[str, Any]:
     return data
 
 
-def _run(playbook: str, inventory: Path, *, ask_become: bool = False, ask_pass: bool = False, extra_vars: dict[str, str] | None = None, env: dict[str, str] | None = None) -> None:
-    command = ["ansible-playbook", "-i", str(inventory), playbook]
+def _run(
+    playbook: str,
+    inventory: Path,
+    *,
+    ask_become: bool = False,
+    ask_pass: bool = False,
+    extra_vars: dict[str, str] | None = None,
+    secret_vars: dict[str, str] | None = None,
+    env: dict[str, str] | None = None,
+) -> None:
+    root = _project_root()
+    playbook_path = Path(playbook)
+    if not playbook_path.is_absolute():
+        playbook_path = root / playbook_path
+    child_env = os.environ.copy()
+    if env:
+        child_env.update(env)
+    ansible_config = root / "ansible.cfg"
+    if ansible_config.is_file():
+        child_env["ANSIBLE_CONFIG"] = str(ansible_config)
+    command = [sys.executable, "-m", "ansible.cli.playbook", "-i", str(inventory), str(playbook_path)]
     if ask_become:
         command.append("--ask-become-pass")
     if ask_pass:
         command.append("--ask-pass")
     for key, value in (extra_vars or {}).items():
         command.extend(["-e", f"{key}={value}"])
-    _log_event("ansible_start", playbook=playbook, inventory=str(inventory))
-    result = subprocess.run(command, check=False, env=env)
+    secret_path: Path | None = None
+    if secret_vars:
+        fd, name = tempfile.mkstemp(prefix="ansible-secrets-", suffix=".json", dir=inventory.parent)
+        secret_path = Path(name)
+        try:
+            os.fchmod(fd, 0o600)
+            with os.fdopen(fd, "w", encoding="utf-8") as stream:
+                json.dump(secret_vars, stream)
+            command.extend(["--extra-vars", f"@{secret_path}"])
+        except BaseException:
+            secret_path.unlink(missing_ok=True)
+            raise
+    try:
+        _log_event("ansible_start", playbook=playbook, inventory=str(inventory))
+        result = subprocess.run(
+            command,
+            check=False,
+            env=child_env,
+        )
+    finally:
+        if secret_path is not None:
+            secret_path.unlink(missing_ok=True)
     _log_event("ansible_finish", playbook=playbook, returncode=result.returncode)
     if result.returncode:
         raise typer.Exit(result.returncode)
@@ -143,11 +176,11 @@ def _local_service_matches(project_root: Path, service_dir: Path | None = None, 
     """
     service_dir = service_dir or (Path.home() / ".config/systemd/user")
     home = home or Path.home()
-    executable = project_root / "re-remote"
-    if not executable.is_file():
+    server_command = _service_server_command(project_root)
+    if server_command is None:
         return False
     expected_service = (project_root / "systemd/tssh.service").read_text(encoding="utf-8").replace(
-        "ExecStart=tssh-server", f"ExecStart={executable} orchestrator-server"
+        "ExecStart=tssh-server", f"ExecStart={server_command}"
     )
     expected_socket = (project_root / "systemd/tssh.socket").read_text(encoding="utf-8")
     files = {
@@ -175,9 +208,9 @@ def _install_local_orchestrator(*, confirm: bool = True, restore_flow: bool = Tr
 
     service_dir = Path.home() / ".config/systemd/user"
     service_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
-    executable = project_root / "re-remote"
-    if not executable.is_file():
-        raise RuntimeError("未找到项目统一入口 re-remote，请确认仓库文件完整。")
+    server_command = _service_server_command(project_root)
+    if server_command is None:
+        raise RuntimeError("未找到 tssh-server 或开发入口，请确认安装制品完整。")
     hook_source = project_root / "scripts/remote_dev_ssh_hook.py"
     hook_target = Path.home() / ".local/bin/remote-dev-ssh-hook"
     hook_target.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -198,7 +231,7 @@ def _install_local_orchestrator(*, confirm: bool = True, restore_flow: bool = Tr
     console.print(f"[green]已清理旧版全局 SSH hook：{ssh_config}；VS Code 使用普通 SSH 配置[/green]")
     service = service_dir / "tssh.service"
     service_content = (project_root / "systemd/tssh.service").read_text(encoding="utf-8")
-    service_content = service_content.replace("ExecStart=tssh-server", f"ExecStart={executable} orchestrator-server")
+    service_content = service_content.replace("ExecStart=tssh-server", f"ExecStart={server_command}")
     service_changed = not service.exists() or service.read_text(encoding="utf-8") != service_content
     service.write_text(service_content, encoding="utf-8")
     service.chmod(0o600)
@@ -354,7 +387,6 @@ def apply(inventory: Path = typer.Option(Path("inventory/production.yml"), "--in
     })
     key = host.get("ansible_ssh_private_key_file", remote["ssh_private_key_file"])
     ssh_port = int(host.get("ansible_port", 22))
-    become_method = host.get("ansible_become_method") or _detect_become_method(destination, key, ssh_port)
     with ReverseProxyTunnel(
         settings=settings,
         destination=destination,
@@ -371,7 +403,7 @@ def apply(inventory: Path = typer.Option(Path("inventory/production.yml"), "--in
             extra["remote_dev_temp_proxy_url"] = tunnel.proxy_url
         if _BOOTSTRAP_TARGET_DIGEST:
             extra["codex_target_digest"] = _BOOTSTRAP_TARGET_DIGEST
-        extra["ansible_become_method"] = become_method
+        extra["ansible_become_method"] = "sudo"
         # The local managed SSH include forwards fixed port 4227 for ordinary
         # sessions; the apply tunnel uses a random port and must not inherit
         # that forwarding (otherwise the target sees a port collision).
@@ -380,103 +412,128 @@ def apply(inventory: Path = typer.Option(Path("inventory/production.yml"), "--in
             # tokenizer otherwise drops the value and treats the next option
             # as the config path.
             extra["ansible_ssh_common_args"] = "-F/dev/null"
-        console.print(f"[cyan]run {RUN_ID}[/cyan] applying {host_name} (become={become_method})")
-        # Both sudo and su may require an interactive credential; Ansible owns
-        # the prompt and never exposes it to command arguments or logs.
+        console.print(f"[cyan]run {RUN_ID}[/cyan] applying {host_name} (become=sudo)")
+        # Ansible reads the sudo password in the TTY and does not expose it to
+        # command arguments, inventory, or logs.
         _run("playbooks/site.yml", inventory, ask_become=True, extra_vars=extra)
 
 
 @app.command()
 def setup() -> None:
-    """交互式恢复单台设备；凭据仅存在于本次运行。"""
+    """以已有的 SSH/sudo 用户恢复远程环境。"""
     _install_local_orchestrator()
     console.print("[bold cyan]阶段 2/2：远程目标交互式恢复[/bold cyan]")
-    host = typer.prompt("目标 IP 或主机名")
-    login_user = typer.prompt("SSH 登录用户名")
-    ssh_port = typer.prompt("SSH 端口", default=22, type=int)
+    destination = typer.prompt("SSH 目标（主机别名、IP 或 user@host）").strip()
+    if not destination:
+        raise typer.BadParameter("SSH 目标不能为空")
+    from .tssh import _resolve_ssh_target
+
+    try:
+        configured_target = _resolve_ssh_target(destination, None, None)
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    host_alias = destination.rsplit("@", 1)[-1]
+    ssh_port = typer.prompt("SSH 端口", default=configured_target.port, type=int)
     if not 1 <= ssh_port <= 65535:
         raise typer.BadParameter("SSH 端口必须位于 1-65535")
+    login_user = typer.prompt(
+        "目标用户名（SSH 登录用户；必须已有 sudo 权限）", default=configured_target.user
+    ).strip()
+    if not login_user:
+        raise typer.BadParameter("目标用户名不能为空")
+    if login_user == "root":
+        raise typer.BadParameter("请提供已有 sudo 权限的普通用户；本项目不使用 root 登录或切换目标用户")
+    if not typer.confirm("确认该用户已存在且具有 sudo 权限？", default=True):
+        console.print("[yellow]请先按 `tssh --help` 中的用户准备说明完成设置，再重新运行 tssh --setup。[/yellow]")
+        raise typer.Exit(0)
     auth = typer.prompt("认证方式（key/password）", default="key").strip().lower()
     if auth not in {"key", "password"}:
         raise typer.BadParameter("认证方式必须是 key 或 password")
     key: str | None = None
-    password: str | None = None
+    login_password: str | None = None
     if auth == "key":
         entered_key = typer.prompt("私钥路径（留空使用全局 SSH 配置/ssh-agent）", default="").strip()
         key = entered_key or None
     else:
-        if not __import__("shutil").which("sshpass"):
+        if not shutil.which("sshpass"):
             raise typer.BadParameter("密码 SSH 需要控制端 sshpass；请先安装后重试")
-        password = typer.prompt("SSH 密码", hide_input=True, confirmation_prompt=False)
-    target_user = typer.prompt("最终配置用户名", default=login_user if login_user != "root" else "dev")
-    target_password = typer.prompt("目标用户密码（可留空，使用 SSH 公钥）", default="", hide_input=True, confirmation_prompt=False)
-    become_method = "su" if login_user == "root" else _detect_become_for_setup(
-        destination=f"{login_user}@{host}",
-        identity_file=key,
-        auth_password=password,
-        port=ssh_port,
-    )
-    destination = f"{login_user}@{host}"
-    # The remote Codex shim must use the same stable target digest as the
-    # local orchestrator.  The temporary inventory name (``interactive``)
-    # is not an identity and caused OAuth events to be discarded.
+        login_password = typer.prompt("SSH 密码", hide_input=True, confirmation_prompt=False)
+    # Stable identity is shared by the local orchestrator and remote Codex shim.
     from .orchestrator.model import TargetKey
-    target_digest = TargetKey(host, ssh_port, target_user).digest
-    run_dir = Path(".local/runs") / RUN_ID
+    target_digest = TargetKey(configured_target.hostname, ssh_port, login_user).digest
+    from .lease_config import load_proxy
+
+    proxy_endpoint = load_proxy()
+    run_dir = _run_dir()
     run_dir.mkdir(parents=True, exist_ok=True)
-    inventory = run_dir / "interactive.yml"
+    inventory = run_dir / "setup-inventory.yml"
+    remote_config = {
+        "schema_version": 1,
+        "target_user": login_user,
+        "ssh_private_key_file": key or "",
+        "profile": "default",
+        "proxy": {"mode": "auto", "host": proxy_endpoint.host, "port": proxy_endpoint.port, "remote_port_range": [40000, 60000]},
+    }
+
     data = {
         "all": {
-            "vars": {"remote_dev": {
-                "schema_version": 1,
-                "target_user": target_user,
-                "target_user_password": target_password,
-                "initial_user": login_user,
-                "ssh_private_key_file": key,
-                "profile": "default",
-                "proxy": {"mode": "auto", "host": "127.0.0.1", "port": 4227, "remote_port_range": [40000, 60000]},
-            }},
+            "vars": {"remote_dev": remote_config},
             "children": {"remote_dev_targets": {"hosts": {"interactive": {
-                "ansible_host": host,
+                # Keep the user's SSH alias so OpenSSH config directives such
+                # as ProxyJump, HostKeyAlias and Include remain in effect.
+                "ansible_host": host_alias,
                 "ansible_user": login_user,
                 "ansible_port": ssh_port,
             }}}},
         }
     }
-    if password is not None:
-        data["all"]["children"]["remote_dev_targets"]["hosts"]["interactive"]["ansible_password"] = password
-    elif key:
-        data["all"]["children"]["remote_dev_targets"]["hosts"]["interactive"]["ansible_ssh_private_key_file"] = key
-    yaml = YAML()
+    host_vars = data["all"]["children"]["remote_dev_targets"]["hosts"]["interactive"]
+    if key:
+        host_vars["ansible_ssh_private_key_file"] = key
+    if auth == "password":
+        host_vars["ansible_ssh_common_args"] = (
+            "-o PubkeyAuthentication=no -o PreferredAuthentications=password,keyboard-interactive "
+            "-o ServerAliveInterval=30 -o ServerAliveCountMax=3"
+        )
     with inventory.open("w", encoding="utf-8") as stream:
-        yaml.dump(data, stream)
+        YAML().dump(data, stream)
     inventory.chmod(0o600)
     try:
         from .proxy import ProxySettings, ReverseProxyTunnel
-        settings = ProxySettings()
+        tunnel_destination = f"{login_user}@{host_alias}"
         with ReverseProxyTunnel(
-            settings=settings,
-            destination=destination,
+            settings=ProxySettings(host=proxy_endpoint.host, port=proxy_endpoint.port),
+            destination=tunnel_destination,
             identity_file=key,
             port=ssh_port,
-            auth_password=password,
+            auth_password=login_password,
         ) as tunnel:
-            extra = {"ansible_become_method": become_method, "codex_target_digest": target_digest}
-            if key or password is not None:
-                extra["ansible_ssh_common_args"] = "-F/dev/null"
+            extra = {
+                "ansible_become_method": "sudo",
+                "codex_target_digest": target_digest,
+            }
             if tunnel.process:
                 extra["remote_dev_temp_proxy_url"] = tunnel.proxy_url
-            if become_method == "sudo":
-                console.print("[yellow]下一步 BECOME password 请填写 SSH 登录用户的 sudo 密码（不是 root 密码）。[/yellow]")
-            else:
-                console.print("[yellow]下一步 BECOME password 请填写 root 密码（su 提权）。[/yellow]")
+            secrets: dict[str, str] = {}
+            if login_password is not None:
+                secrets["ansible_password"] = login_password
             env = os.environ.copy()
-            if password is not None:
+            if login_password is not None:
                 env["ANSIBLE_SSH_PASSWORD_MECHANISM"] = "sshpass"
-            _run("playbooks/site.yml", inventory, ask_become=True, extra_vars=extra, env=env)
+            console.print("[cyan]以目标用户 SSH 登录，并通过 sudo 恢复环境；本流程不会创建或修改目标账号。[/cyan]")
+            console.print("[yellow]Ansible 随后会在终端中请求该用户的 sudo 密码。[/yellow]")
+            _run(
+                "playbooks/site.yml",
+                inventory,
+                ask_become=True,
+                secret_vars=secrets,
+                extra_vars=extra,
+                env=env,
+            )
     finally:
+        inventory.unlink(missing_ok=True)
+        (run_dir / "events.jsonl").unlink(missing_ok=True)
         try:
-            inventory.unlink()
             run_dir.rmdir()
         except OSError:
             pass
@@ -535,7 +592,12 @@ def doctor(inventory: Path = typer.Option(Path("inventory/production.yml"), "--i
         typer.echo(f"CONFIG_ERROR: {exc}", err=True)
         raise typer.Exit(2) from exc
     typer.echo("CONFIG_OK")
-    typer.echo("ANSIBLE_OK" if subprocess.run(["ansible-playbook", "--version"], check=False, stdout=subprocess.DEVNULL).returncode == 0 else "ANSIBLE_MISSING")
+    ansible_ok = subprocess.run(
+        [sys.executable, "-m", "ansible.cli.playbook", "--version"],
+        check=False,
+        stdout=subprocess.DEVNULL,
+    ).returncode == 0
+    typer.echo("ANSIBLE_OK" if ansible_ok else "ANSIBLE_MISSING")
 
 
 @app.command("ssh-integration-install")
@@ -577,17 +639,11 @@ def codex_login(
     remote = data["all"]["vars"]["remote_dev"]
     destination = f"{host.get('ansible_user', remote['target_user'])}@{host['ansible_host']}"
     key = host.get("ansible_ssh_private_key_file", remote["ssh_private_key_file"])
-    from .proxy import ProxySettings, local_proxy_available
-    proxy = ProxySettings(
-        host=remote.get("proxy", {}).get("host", "127.0.0.1"),
-        port=int(remote.get("proxy", {}).get("port", 4227)),
-    )
-    if not local_proxy_available(proxy):
-        console.print(
-            f"[red]本机 HTTP 代理 {proxy.host}:{proxy.port} 不可用，Codex 登录需要外网代理；"
-            "请先启动代理后重试。[/red]"
-        )
-        raise typer.Exit(2)
+    from .proxy import ProxySettings
+    from .lease_config import load_proxy
+
+    proxy_endpoint = load_proxy()
+    proxy = ProxySettings(host=proxy_endpoint.host, port=proxy_endpoint.port)
     local_callback = False
     callback_probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     try:

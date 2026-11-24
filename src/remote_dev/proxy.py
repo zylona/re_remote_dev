@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import secrets
 import shlex
-import socket
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -29,17 +28,6 @@ class ProxySettings:
             raise ValueError("代理 host/port 无效")
         if not 1024 <= self.remote_port_min <= self.remote_port_max <= 65535:
             raise ValueError("远端临时端口范围无效")
-
-
-def local_proxy_available(settings: ProxySettings, timeout: float = 0.5) -> bool:
-    """只读探测执行端 HTTP 代理是否监听。"""
-
-    settings.validate()
-    try:
-        with socket.create_connection((settings.host, settings.port), timeout=timeout):
-            return True
-    except (OSError, ValueError):
-        return False
 
 
 def choose_remote_port(settings: ProxySettings) -> int:
@@ -100,12 +88,13 @@ class ReverseProxyTunnel:
         command = [self.ssh_bin, "-N", "-T"]
         if self.port != 22:
             command.extend(["-p", str(self.port)])
-        if self.identity_file and self.identity_file != "/dev/null":
-            command.extend(["-F", "/dev/null"])
-        elif self.auth_password is not None:
-            # Password mode is intentionally isolated from key-only global SSH
-            # rules; a key-less key-mode connection keeps the user's config.
-            command.extend(["-F", "/dev/null"])
+        if self.auth_password is not None:
+            # Keep the SSH config (ProxyJump, HostKeyAlias, etc.) while forcing
+            # password auth for this one setup run.
+            command.extend([
+                "-o", "PubkeyAuthentication=no",
+                "-o", "PreferredAuthentications=password,keyboard-interactive",
+            ])
         command.extend([
             *self.ssh_extra_args,
             *ssh_reverse_forward_args(self.settings, self.remote_port),
@@ -120,10 +109,6 @@ class ReverseProxyTunnel:
     def start(self) -> None:
         self.settings.validate()
         if self.settings.mode == "off":
-            return
-        if not local_proxy_available(self.settings):
-            if self.settings.mode == "required":
-                raise RuntimeError("执行端临时 HTTP 代理不可用")
             return
         env = None
         if self.auth_password is not None:

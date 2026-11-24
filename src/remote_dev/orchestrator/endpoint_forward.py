@@ -6,6 +6,7 @@ import subprocess
 import time
 from pathlib import Path
 
+from ..lease_config import load_proxy
 from .model import EndpointKey, TargetKey
 from .proxy_persistent import ensure, probe_remote_proxy, remove, unit_path
 
@@ -20,6 +21,7 @@ class EndpointForwardManager:
         self._event_only: set[str] = set()
 
     def start(self, endpoint: EndpointKey, user: str, identity_file: Path, *, event_forward: bool = True) -> None:
+        proxy = load_proxy()
         target = TargetKey(endpoint.hostname, endpoint.port, user)
         path = unit_path(target)
         local_active = subprocess.run(
@@ -31,7 +33,7 @@ class EndpointForwardManager:
         proxy_forward = True
         if local_active:
             try:
-                proxy_forward = "127.0.0.1:4227:127.0.0.1:4227" in path.read_text(encoding="utf-8")
+                proxy_forward = f"127.0.0.1:4227:{proxy.host}:{proxy.port}" in path.read_text(encoding="utf-8")
             except OSError:
                 proxy_forward = True
             if not proxy_forward and not event_forward:
@@ -51,7 +53,14 @@ class EndpointForwardManager:
             if probe.state == "occupied":
                 raise RuntimeError("远端 4227 已被占用且代理请求无响应；疑似异常旧 SSH 转发，请先运行 tssh doctor/reclaim")
         try:
-            path = ensure(target, identity_file, event_forward=event_forward, proxy_forward=proxy_forward)
+            path = ensure(
+                target,
+                identity_file,
+                event_forward=event_forward,
+                proxy_forward=proxy_forward,
+                local_proxy_host=proxy.host,
+                local_proxy_port=proxy.port,
+            )
         except Exception:
             # This start was not active before the attempt, so removing the
             # just-created unit cannot affect another lease.  It prevents a

@@ -71,7 +71,7 @@ def test_tssh_reclaim_dry_run_never_terminates(monkeypatch, capsys):
         return subprocess.CompletedProcess(command, 0, stdout=snapshot())
 
     monkeypatch.setattr(tssh.subprocess, "run", run)
-    assert tssh.main(["reclaim", "alice@host", "--dry-run"]) == 0
+    assert tssh.main(["--reclaim", "alice@host", "--dry-run"]) == 0
     output = capsys.readouterr().out
     assert "session 12" in output
     assert "预览结束" in output
@@ -93,7 +93,7 @@ def test_tssh_reclaim_yes_rechecks_and_terminates_candidate(monkeypatch, capsys)
         return subprocess.CompletedProcess(command, 0, stdout="TERMINATED\t12\t24067\n")
 
     monkeypatch.setattr(tssh.subprocess, "run", run)
-    assert tssh.main(["reclaim", "alice@host", "--yes"]) == 0
+    assert tssh.main(["--reclaim", "alice@host", "--yes"]) == 0
     assert len(calls) == 2
     assert "terminate" in calls[1][-1]
     assert "已发送 TERM" in capsys.readouterr().out
@@ -112,6 +112,6 @@ def test_tssh_reclaim_refuses_to_act_when_any_owner_is_ambiguous(monkeypatch, ca
         return subprocess.CompletedProcess(command, 0, stdout=snapshot(listener_uid=1001))
 
     monkeypatch.setattr(tssh.subprocess, "run", run)
-    assert tssh.main(["reclaim", "alice@host", "--yes"]) == 1
+    assert tssh.main(["--reclaim", "alice@host", "--yes"]) == 1
     assert len(calls) == 1
     assert "没有结束任何进程" in capsys.readouterr().err

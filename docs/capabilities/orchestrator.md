@@ -50,9 +50,9 @@ Release 制品提供 `tssh` 作为独立的 SSH 入口。它不替换普通 `ssh
 共享一个 endpoint forwarder；最后一个 lease 释放后才清理隧道。
 
 Endpoint forwarder 是按 lease 创建的临时 user unit，不加入 `default.target`，也不会在没有
-`tssh` 会话时自启动。`tssh persist` 只在当前开机周期启动一个未 enable 的 user unit；关机
+`tssh` 会话时自启动。`tssh --persist` 只在当前开机周期启动一个未 enable 的 user unit；关机
 时由 `Before/Conflicts=shutdown.target` 和 `KillMode=control-group` 收敛，重启后不会自动恢复，
-用户需要再次执行 `tssh persist`。编排器启动时会清理上一进程遗留的 `remote-dev-proxy-*`
+用户需要再次执行 `tssh --persist`。编排器启动时会清理上一进程遗留的 `remote-dev-proxy-*`
 unit；首个
 lease 启动隧道，最后一个 lease 释放时执行 `disable --now` 并删除 unit。owner 只是负责创建
 或接管隧道的候选凭据，owner 窗口退出但仍有其他 lease 时不会关闭健康隧道。
@@ -154,7 +154,7 @@ HTTP 代理请求超时则标记为 `REMOTE_PORT_BUSY`，默认不杀远端未�
 控制端或用户。只有用户明确执行受控 reclaim 流程时，才允许进一步处理可确认属于本项目的
 旧连接。远端固定端口无法被普通 SSH 客户端安全强制替换，这是设计上的安全边界。
 
-`tssh reclaim user@host` 是本机提供的一次性恢复入口，不要求目标机安装远端 Agent。它通过
+`tssh --reclaim user@host` 是本机提供的一次性恢复入口，不要求目标机安装远端 Agent。它通过
 普通 SSH 扫描 4227/4228 的监听者，默认展示候选并要求确认；`--dry-run` 只检查，`--yes` 用于
 非交互调用。只有监听者映射到目标登录用户的无终端 `sshd` 会话、该会话只持有 4227/4228，且
 会话进程没有其他命令时才允许发送 `TERM`。发现其他用户、非 SSH 监听、额外监听端口或缺少

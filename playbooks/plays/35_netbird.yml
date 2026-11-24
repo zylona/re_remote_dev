@@ -4,4 +4,12 @@
   gather_facts: true
   become: true
   roles:
-    - netbird
+    - role: netbird
+      when: ansible_facts.service_mgr == 'systemd' or (ansible_facts.service_mgr == 'openrc' and ansible_facts.pkg_mgr == 'apk')
+  post_tasks:
+    - name: 报告 NetBird 服务管理不可用
+      ansible.builtin.debug:
+        msg: >-
+          NOT_APPLICABLE: 当前 service manager={{ ansible_facts.service_mgr }}，NetBird daemon
+          需要 systemd，或 Alpine 的 OpenRC；跳过客户端安装，继续恢复其他工具。
+      when: ansible_facts.service_mgr != 'systemd' and not (ansible_facts.service_mgr == 'openrc' and ansible_facts.pkg_mgr == 'apk')

@@ -4,50 +4,42 @@ set -euo pipefail
 root_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 version="${RELEASE_VERSION:-$(tr -d '[:space:]' < "$root_dir/VERSION")}"
 [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z.-]+)?$ ]] || { echo "invalid release version: $version" >&2; exit 2; }
+command -v uv >/dev/null || { echo "uv is required to build the self-contained Linux artifact" >&2; exit 1; }
 dist_dir="$root_dir/dist"
 stage_dir="$(mktemp -d)"
 trap 'rm -rf "$stage_dir"' EXIT
-pkg="remote-dev-orchestrator-v${version}-linux"
-mkdir -p "$stage_dir/$pkg/lib/remote_dev" "$stage_dir/$pkg/bin" "$dist_dir"
-cp -R "$root_dir/src/remote_dev/orchestrator" "$stage_dir/$pkg/lib/remote_dev/"
-cp "$root_dir/src/remote_dev/ssh_integration.py" \
-  "$root_dir/src/remote_dev/tssh.py" \
-  "$root_dir/src/remote_dev/lease_config.py" \
-  "$root_dir/src/remote_dev/file_transfer.py" \
-  "$root_dir/src/remote_dev/upload.py" \
-  "$root_dir/src/remote_dev/preview_bridge.py" \
-  "$root_dir/src/remote_dev/preview_open.py" \
-  "$root_dir/src/remote_dev/download.py" \
-  "$root_dir/src/remote_dev/tssh_reclaim.py" \
-  "$stage_dir/$pkg/lib/remote_dev/"
-cp "$root_dir/scripts/remote_dev_ssh_hook.py" "$stage_dir/$pkg/bin/remote-dev-ssh-hook"
-cp "$root_dir/scripts/tdl" "$stage_dir/$pkg/bin/tdl"
-find "$stage_dir/$pkg" -type d -name '__pycache__' -prune -exec rm -rf {} +
-find "$stage_dir/$pkg" -type f -name '*.pyc' -delete
-cp "$root_dir/release/install" "$root_dir/release/uninstall" "$root_dir/release/rollback" "$stage_dir/$pkg/"
-cp "$root_dir/systemd/tssh.service" "$root_dir/systemd/tssh.socket" "$stage_dir/$pkg/"
-cp "$root_dir/LICENSE" "$stage_dir/$pkg/LICENSE"
-cat > "$stage_dir/$pkg/VERSION" <<EOF
-$version
-EOF
-cat > "$stage_dir/$pkg/bin/tssh-server" <<'EOF'
-#!/usr/bin/env bash
-set -euo pipefail
-script_path="${BASH_SOURCE[0]}"
-while [[ -L "$script_path" ]]; do
-  link_target="$(readlink "$script_path")"
-  if [[ "$link_target" = /* ]]; then
-    script_path="$link_target"
-  else
-    script_path="$(dirname "$script_path")/$link_target"
-  fi
-done
-base_dir="$(cd "$(dirname "$script_path")/.." && pwd)"
-export PYTHONPATH="$base_dir/lib${PYTHONPATH:+:$PYTHONPATH}"
-exec "${PYTHON:-python3}" -m remote_dev.orchestrator "$@"
-EOF
-ln -s tssh-server "$stage_dir/$pkg/bin/remote-dev-orchestrator-server"
-cat > "$stage_dir/$pkg/bin/tssh" <<'EOF'
+pkg="tssh-v${version}-linux-x86_64"
+product="$stage_dir/$pkg"
+mkdir -p "$product/lib/remote_dev" "$product/lib/python/site-packages" "$product/bin" "$dist_dir"
+
+# Build-time downloads only: ship CPython and all locked runtime dependencies.
+if [[ -n "${TSSH_PYTHON_SOURCE_DIR:-}" ]]; then
+  cp -a "$TSSH_PYTHON_SOURCE_DIR/." "$product/python/"
+else
+  uv python install 3.14 --install-dir "$product/python"
+fi
+python_bin="$(find "$product/python" -type f -path '*/bin/python3.14' -print -quit)"
+[[ -n "$python_bin" ]] || { echo "could not locate bundled CPython 3.14" >&2; exit 1; }
+"$python_bin" -c 'import sys; assert sys.version_info[:2] == (3, 14); print("Bundled", sys.version.split()[0])'
+uv export --project "$root_dir" --locked --no-dev --group runtime --no-emit-project --format requirements-txt \
+  --output-file "$stage_dir/runtime-requirements.txt"
+uv pip install --python "$python_bin" --target "$product/lib/python/site-packages" \
+  --requirements "$stage_dir/runtime-requirements.txt"
+
+cp -R "$root_dir/src/remote_dev/." "$product/lib/remote_dev/"
+cp -R "$root_dir/playbooks" "$root_dir/roles" "$root_dir/templates" "$product/"
+mkdir -p "$product/systemd" "$product/scripts"
+cp "$root_dir/systemd/tssh.service" "$root_dir/systemd/tssh.socket" "$product/systemd/"
+cp "$root_dir/scripts/remote_dev_ssh_hook.py" "$root_dir/scripts/remote_preview_helper.py" "$root_dir/scripts/tdl" "$product/scripts/"
+cp "$root_dir/ansible.cfg" "$product/ansible.cfg"
+cp "$root_dir/scripts/remote_dev_ssh_hook.py" "$product/bin/remote-dev-ssh-hook"
+cp "$root_dir/scripts/tdl" "$product/bin/tdl"
+cp "$root_dir/release/install" "$root_dir/release/uninstall" "$root_dir/release/rollback" "$product/"
+cp "$root_dir/systemd/tssh.service" "$root_dir/systemd/tssh.socket" "$product/"
+cp "$root_dir/LICENSE" "$product/LICENSE"
+printf '%s\n' "$version" > "$product/VERSION"
+
+cat > "$product/bin/tssh-python" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
 script_path="${BASH_SOURCE[0]}"
@@ -56,10 +48,55 @@ while [[ -L "$script_path" ]]; do
   if [[ "$link_target" = /* ]]; then script_path="$link_target"; else script_path="$(dirname "$script_path")/$link_target"; fi
 done
 base_dir="$(cd "$(dirname "$script_path")/.." && pwd)"
-export PYTHONPATH="$base_dir/lib${PYTHONPATH:+:$PYTHONPATH}"
-exec "${PYTHON:-python3}" -m remote_dev.tssh "$@"
+python_bin="$(find "$base_dir/python" -type f -path '*/bin/python3.14' -print -quit)"
+[[ -n "$python_bin" ]] || { echo 'tssh: bundled Python runtime is missing' >&2; exit 1; }
+export PYTHONPATH="$base_dir/lib/python/site-packages:$base_dir/lib${PYTHONPATH:+:$PYTHONPATH}"
+export PATH="$(dirname "$python_bin"):$base_dir/bin:$PATH"
+exec "$python_bin" "$@"
 EOF
-chmod 0755 "$stage_dir/$pkg/bin/tssh-server" "$stage_dir/$pkg/bin/remote-dev-ssh-hook" "$stage_dir/$pkg/bin/tdl" "$stage_dir/$pkg/bin/tssh" "$stage_dir/$pkg/install" "$stage_dir/$pkg/uninstall" "$stage_dir/$pkg/rollback"
+cat > "$product/bin/tssh-server" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+script_path="${BASH_SOURCE[0]}"
+while [[ -L "$script_path" ]]; do
+  link_target="$(readlink "$script_path")"
+  if [[ "$link_target" = /* ]]; then script_path="$link_target"; else script_path="$(dirname "$script_path")/$link_target"; fi
+done
+base_dir="$(cd "$(dirname "$script_path")/.." && pwd)"
+exec "$base_dir/bin/tssh-python" -m remote_dev.orchestrator "$@"
+EOF
+cat > "$product/bin/tssh" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+script_path="${BASH_SOURCE[0]}"
+while [[ -L "$script_path" ]]; do
+  link_target="$(readlink "$script_path")"
+  if [[ "$link_target" = /* ]]; then script_path="$link_target"; else script_path="$(dirname "$script_path")/$link_target"; fi
+done
+base_dir="$(cd "$(dirname "$script_path")/.." && pwd)"
+exec "$base_dir/bin/tssh-python" -m remote_dev.tssh "$@"
+EOF
+cat > "$product/bin/remote-dev" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+script_path="${BASH_SOURCE[0]}"
+while [[ -L "$script_path" ]]; do
+  link_target="$(readlink "$script_path")"
+  if [[ "$link_target" = /* ]]; then script_path="$link_target"; else script_path="$(dirname "$script_path")/$link_target"; fi
+done
+base_dir="$(cd "$(dirname "$script_path")/.." && pwd)"
+export ANSIBLE_CONFIG="$base_dir/ansible.cfg"
+exec "$base_dir/bin/tssh-python" -m remote_dev "$@"
+EOF
+chmod 0755 "$product/bin/"* "$product/install" "$product/uninstall" "$product/rollback"
+
+export PYTHONPATH="$product/lib/python/site-packages:$product/lib"
+export ANSIBLE_CONFIG="$product/ansible.cfg"
+"$python_bin" -m remote_dev.tssh --help >/dev/null
+"$python_bin" -m ansible.cli.playbook --version >/dev/null
+find "$product" -type d -name '__pycache__' -prune -exec rm -rf {} +
+find "$product" -type f -name '*.pyc' -delete
+
 tar_args=(--sort=name --owner=0 --group=0 --numeric-owner -czf "$dist_dir/$pkg.tar.gz" -C "$stage_dir" "$pkg")
 if [[ -n "${SOURCE_DATE_EPOCH:-}" ]]; then tar_args+=(--mtime="@$SOURCE_DATE_EPOCH"); fi
 tar "${tar_args[@]}"

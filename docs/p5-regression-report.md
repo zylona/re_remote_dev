@@ -30,7 +30,7 @@
   `127.0.0.1:4227` 接到宿主机代理；Debian 作为远端开发目标。Omarchy 上的 tssh 持久代理、
   Debian 远端 4227 请求（HTTP 200）和两个并发窗口均通过。
 - 故障注入：停止 Omarchy 的 4227 上游后，Debian 的代理请求失败；恢复上游后请求恢复 200，
-  SSH 会话本身未被强制关闭。当前 `tssh list` 的 `READY` 表示 SSH 转发进程存活，不代表上游
+  SSH 会话本身未被强制关闭。当前 `tssh --list` 的 `READY` 表示 SSH 转发进程存活，不代表上游
   HTTP 代理一定可用；这是后续数据面健康检查增强项。
 
 ## 测试对象
@@ -60,7 +60,7 @@
   sidecar 均生成；重复请求命中缓存；
 - 两个同设备窗口同时连接时 endpoint 只保留一个共享代理，两个会话均正常退出；
 - Omarchy→Debian 的 4227/4228 reverse-forward 均为 `READY`，无本地端口冲突；
-- 远端 4227 被临时进程占用时，SSH 仍可登录，`tssh list` 正确显示 endpoint 和两个
+- 远端 4227 被临时进程占用时，SSH 仍可登录，`tssh --list` 正确显示 endpoint 和两个
   forward 为 `DEGRADED`，释放占用后会话清理正常；
 - 与 VS Code Remote-SSH 同时启动同一 Debian VM，VS Code CLI 返回 0，tssh endpoint
   保持 `READY`，两者没有共享 ControlMaster 或互相注入参数。
@@ -95,3 +95,41 @@
 Codex 官方安装器在 Debian VM 的完整恢复中出现长时间无输出，因此本次 P5
 使用独立的 helper/Nvim 角色部署完成预览链路验证，未将该安装器等待误判为
 预览功能失败。
+
+## 2026-11-24 本机 Incus 平台迁移与 tssh Rich CLI 验收
+
+- 测试平台从已关机的 Thunderobot Incus 实例迁移到本机 Incus；未启动或修改旧实例。
+- 构建并安装本地测试制品 `tssh-v0.1.34-linux-x86_64.tar.gz`，SHA256：
+  `572527bfd983091cf1cb1299b026cc284c0e50f0d99d6cc0ba25b06cf2b1a5a1`。
+- Debian 13 控制端 VM `tssh-control-20261124` 安装成功。制品自带 CPython 3.14.7、
+  Rich 15.0.0、ansible-core 2.21.3；`tssh --version`、`--help`、`--list` 可用，
+  用户级 `tssh.socket` / `tssh.service` 为 active。help 的 Rich 分组面板和 list 状态表
+  均正常，非 TTY 模式不会输出 ANSI 控制码。
+- 全量仓库门禁：pytest 177 passed；Ansible inventory 与 site syntax-check 通过；
+  ansible-lint 0 failure / 0 warning；`git diff --check` 通过。
+- 本机 Incus 创建 Debian 13 目标 VM `tssh-target-vm-20261124`。最初镜像没有
+  `openssh-server`；HTTP 80 不通，DNS 返回 Clash fake-IP。目标 VM 临时切换到 Debian
+  官方 HTTPS 源并映射到可达 CDN IPv4 后，`apt-get update` 成功，安装了 `openssh-server`
+  和 sudo。没有修改本机 Clash 或 SSH 配置。
+- 真实 SSH 公钥登录、反向 4227/4228 转发通过。目标端经 4227 请求控制 VM loopback 上的
+  HTTP 测试代理，返回预期响应；`tssh --list` 同时显示 proxy/event `READY`。
+- 普通 `ssh` 连接成功后，`tssh --list` 仍显示 `IDLE`；SSH 有效配置为
+  `permitlocalcommand no`，没有注入 `LocalCommand`。
+- 两个并发 tssh 会话共享同一个 endpoint，`SESSIONS=2`；另一连接通过该共享隧道访问
+  代理成功。两个会话结束后 lease 清零，目标 VM 上 4227/4228 listener 均消失。
+- `tssh --put` 单文件、递归目录，以及 shell 展开的多文件/通配符上传通过，远端文件内容
+  与目录结构已核对。
+- Rich/tssh 相关自动化回归：`uv run --locked pytest tests/test_tssh.py tests/test_tssh_user_config.py -q`，19 passed；`git diff --check` 通过。
+- 后续已用 host→control VM 反向转发连接真实本机 Clash，完成目标 VM 的完整 `tssh --setup`
+  和只读 verify；Codex、CodexSwitch、Neovim、NetBird 和 12 个 Skills 均通过。完整恢复发现并
+  修复 mise 下载摘要、zoxide gzip API 响应、Codex 重复迁移 changed 与 Lazy 锁文件漂移。
+  最终第二次 apply recap：`ok=191 changed=0 unreachable=0 failed=0 skipped=107`。
+- 最终交互回归中，通过 `tssh` 会话访问目标端 4227 并请求 `https://github.com` 得到 HTTP 200；
+  普通 `ssh` 到同一 VM 不产生代理 lease；退出后的 `tssh --list` 为 IDLE。目标 VM 实测 Codex CLI
+  0.171.0、Neovim 0.11.3、mise 2026.11.8、23 个 Treesitter parser 和 12 个 Skills。
+- VS Code 桌面 GUI 与浏览器 OAuth 回调未在本轮执行；本轮通过的是制品安装、完整远端恢复、
+  只读验收和幂等性，不将 GUI/登录链路标为已验收。
+- 最终修复后重新运行本机全量门禁：pytest 179 passed，Ansible syntax-check 通过，
+  ansible-lint 0 failure / 0 warning，`git diff --check` 通过。此前的 177 passed 是修复前结果。
+- 诊断容器已删除；当前本机保留两台 Debian VM。测试 SSH 私钥保存在被 Git 忽略的
+  `.local/incus-test/`，仅用于复测。

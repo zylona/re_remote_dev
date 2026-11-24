@@ -46,6 +46,11 @@
       ansible.builtin.import_role:
         name: netbird
         tasks_from: verify
+      when: ansible_facts.service_mgr == 'systemd' or (ansible_facts.service_mgr == 'openrc' and ansible_facts.pkg_mgr == 'apk')
+    - name: 报告 NetBird 验收不适用
+      ansible.builtin.debug:
+        msg: "NOT_APPLICABLE: 目标机没有受支持的服务管理器，无法运行 NetBird daemon。"
+      when: ansible_facts.service_mgr != 'systemd' and not (ansible_facts.service_mgr == 'openrc' and ansible_facts.pkg_mgr == 'apk')
     - name: 验证 Codex CLI（只读）
       ansible.builtin.command:
         argv: ["{{ ansible_facts.user_dir }}/.local/bin/codex", --version]

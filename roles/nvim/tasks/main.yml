@@ -2,10 +2,12 @@
 - name: 检查 Treesitter C 编译器
   ansible.builtin.shell:
     cmd: >-
-      set -o pipefail;
-      printf '#include <stdint.h>\n#include <stdio.h>\nint main(void){return 0;}\n' |
-      cc -x c -c -o /tmp/remote-dev-treesitter-probe.o - &&
-      rm -f /tmp/remote-dev-treesitter-probe.o
+      set -e;
+      trap 'rm -f /tmp/remote-dev-treesitter-probe.c /tmp/remote-dev-treesitter-probe.o' EXIT;
+      printf '#include <stdint.h>\n#include <stdio.h>\nint main(void){return 0;}\n'
+      > /tmp/remote-dev-treesitter-probe.c;
+      cc -x c -c -o /tmp/remote-dev-treesitter-probe.o
+      /tmp/remote-dev-treesitter-probe.c
   args:
     executable: /bin/sh
   register: nvim_cc_probe
@@ -53,10 +55,12 @@
 - name: 验证 Treesitter C 编译器可用
   ansible.builtin.shell:
     cmd: >-
-      set -o pipefail;
-      printf '#include <stdint.h>\n#include <stdio.h>\nint main(void){return 0;}\n' |
-      cc -x c -c -o /tmp/remote-dev-treesitter-probe.o - &&
-      rm -f /tmp/remote-dev-treesitter-probe.o
+      set -e;
+      trap 'rm -f /tmp/remote-dev-treesitter-probe.c /tmp/remote-dev-treesitter-probe.o' EXIT;
+      printf '#include <stdint.h>\n#include <stdio.h>\nint main(void){return 0;}\n'
+      > /tmp/remote-dev-treesitter-probe.c;
+      cc -x c -c -o /tmp/remote-dev-treesitter-probe.o
+      /tmp/remote-dev-treesitter-probe.c
     executable: /bin/sh
   register: nvim_cc_verify
   changed_when: false
@@ -209,7 +213,6 @@
 
 - name: 解压兼容版 Treesitter CLI
   ansible.builtin.shell: >-
-    set -o pipefail &&
     gzip -dc
     {{ ansible_facts.user_dir }}/.cache/tree-sitter-cli-{{ nvim_treesitter_cli_legacy_version }}-x64.gz
     > {{ nvim_treesitter_cli_root }}/tree-sitter.legacy &&
@@ -468,9 +471,28 @@
     HTTPS_PROXY: "{{ remote_dev_temp_proxy_url | default(omit) }}"
     PATH: "{{ nvim_install_dir }}:/usr/local/bin:/usr/bin:/bin"
 
-- name: 按锁文件同步 LazyVim 插件
-  ansible.builtin.command:
-    argv: [timeout, 300, nvim, --headless, "+Lazy! sync", "+qa!"]
+- name: 按锁文件恢复 LazyVim 插件并重试未完成的首次克隆 # noqa command-instead-of-shell
+  ansible.builtin.shell:
+    cmd: |
+      set -eu
+      log_file=$(mktemp /tmp/remote-dev-lazy-sync.XXXXXX)
+      trap 'rm -f "$log_file"' EXIT HUP INT TERM
+      attempt=1
+      while [ "$attempt" -le 3 ]; do
+        timeout 300 nvim --headless "+Lazy! restore" "+qa!" >"$log_file" 2>&1 || true
+        if [ -f "{{ nvim_data_dir }}/lazy/nvim-treesitter/lua/nvim-treesitter/init.lua" ] &&
+           [ -x "{{ nvim_data_dir }}/lazy/markdown-preview.nvim/app/bin/markdown-preview-linux" ]; then
+          echo "LazyVim 插件恢复完成（尝试 ${attempt}/3）"
+          exit 0
+        fi
+        echo "LazyVim 插件尚未完整（尝试 ${attempt}/3）；最近日志："
+        tail -n 12 "$log_file"
+        attempt=$((attempt + 1))
+      done
+      echo "LazyVim 插件恢复重试后仍缺少 nvim-treesitter 或 Markdown Preview。" >&2
+      exit 1
+  args:
+    executable: /bin/sh
   register: nvim_plugin_sync
   changed_when: false
   failed_when: nvim_plugin_sync.rc != 0
@@ -525,7 +547,11 @@
       - -u
       - "{{ nvim_config_dir }}/init.lua"
       - >-
-        +lua local ts=require('nvim-treesitter'); local langs={{ nvim_treesitter_languages | to_json }};
+        +lua local ok,ts=pcall(require,'nvim-treesitter');
+        if not ok or type(ts.install)~='function' then
+        vim.api.nvim_err_writeln('nvim-treesitter main API not loaded'); vim.cmd('cquit 1')
+        end;
+        local langs={{ nvim_treesitter_languages | to_json }};
         local task=ts.install(langs, {summary=true, max_jobs=4});
         if not task:wait(840000) then vim.cmd('cquit 1') end
       - +qa!

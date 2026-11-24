@@ -22,9 +22,19 @@ from .oauth import OAuthError, OAuthManager
 from .endpoint_forward import EndpointForwardManager
 from .proxy_persistent import cleanup_orphans
 from .health import classify_failure, retry_delay
-from ..lease_config import load as load_lease_settings
+from ..lease_config import load as load_lease_settings, load_proxy
 
 MAX_REQUEST_BYTES = 8 * 1024
+
+
+def _local_proxy_port() -> int:
+    try:
+        return load_proxy().port
+    except ValueError:
+        # Keep the socket service available so `tssh --proxy` can repair a
+        # malformed user config; zero in status signals that the endpoint is
+        # currently invalid.
+        return 0
 
 
 class OrchestratorServer:
@@ -281,7 +291,7 @@ class OrchestratorServer:
                             control_path=None,
                             proxy_available=True,
                             session_count=1,
-                            proxy_forward=ForwardStatus("proxy", ForwardState.READY, remote_port=4227, local_port=4227),
+                            proxy_forward=ForwardStatus("proxy", ForwardState.READY, remote_port=4227, local_port=_local_proxy_port()),
                             event_forward=ForwardStatus("event", ForwardState.READY, remote_port=4228, local_port=4230),
                         )
                     else:
@@ -460,7 +470,7 @@ class OrchestratorServer:
             "remote_host": "127.0.0.1",
             "remote_port": 4227,
             "local_host": "127.0.0.1",
-            "local_port": 4227,
+            "local_port": _local_proxy_port(),
             "state": state,
             "last_error": error,
         }]

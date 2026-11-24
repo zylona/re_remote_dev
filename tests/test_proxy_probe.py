@@ -115,7 +115,12 @@ def test_endpoint_manager_uses_event_only_leg_for_healthy_proxy(monkeypatch):
     )
     monkeypatch.setattr("remote_dev.orchestrator.endpoint_forward.remove", lambda *args, **kwargs: calls.append("remove"))
     manager.start(endpoint, "user", Path("/tmp/id"), event_forward=True)
-    assert calls[0] == {"event_forward": True, "proxy_forward": False}
+    assert calls[0] == {
+        "event_forward": True,
+        "proxy_forward": False,
+        "local_proxy_host": "127.0.0.1",
+        "local_proxy_port": 4227,
+    }
 
 
 def test_endpoint_manager_rejects_unresponsive_occupied_proxy(monkeypatch):

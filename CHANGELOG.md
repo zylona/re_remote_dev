@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.1.35]
+
+- 将完整远端恢复入口整合进自包含的 `tssh` 制品，提供 `tssh --setup`、产品帮助和用户配置管理；普通 SSH 参数仍转交 OpenSSH。
+- 发布包携带 CPython、Rich、ansible-core 和恢复所需 Playbook/Roles，安装无需另行安装 Python/Ansible。
+- setup 仅面向用户已创建且可 sudo 的账号，支持 SSH 密钥或密码、目标 SSH 端口，并交互读取 sudo 密码。
+- 修复首次/重复恢复中的 zoxide 安装判断、Codex mise 安装变更检测、旧 Codex symlink 迁移和 Neovim Lazy 锁文件恢复幂等性。
+- 完成本机 Incus Debian 控制端到目标端的制品安装与完整恢复验收；第二次 apply 为 `changed=0`，真实 4227 代理请求 GitHub 返回 HTTP 200。
+
+
 ## [0.1.34]
 
 - `tssh` 及其 `put`、`persist`、`stop`、`reclaim` 子命令通过 `ssh -G` 读取 SSH 配置中的有效主机、用户、端口和密钥；显式 `-p` 覆盖配置端口。

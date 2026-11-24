@@ -5,11 +5,6 @@ version="$(tr -d '[:space:]' < "$pkg_dir/VERSION")"
 base="${XDG_DATA_HOME:-$HOME/.local/share}/tssh"
 legacy_base="${XDG_DATA_HOME:-$HOME/.local/share}/remote-dev-orchestrator"
 target="$base/versions/$version"
-python_bin="${PYTHON:-python3}"
-if ! command -v "$python_bin" >/dev/null 2>&1; then
-  echo "remote-dev-orchestrator requires Python 3 (missing: $python_bin)" >&2
-  exit 1
-fi
 if [ ! -e "$base" ] && [ -d "$legacy_base" ]; then
   mv "$legacy_base" "$base"
 fi
@@ -41,7 +36,7 @@ ln -sfn "$base/current/bin/tssh" "$bin_dir/tssh"
 ln -sfn "$base/current/bin/tdl" "$bin_dir/tdl"
 unit_dir="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
 mkdir -p "$unit_dir"
-sed "s#^ExecStart=.*#ExecStart=$base/current/bin/tssh-server#" "$pkg_dir/tssh.service" > "$unit_dir/tssh.service"
+sed "s#^ExecStart=.*#ExecStart=$target/bin/tssh-server#" "$pkg_dir/tssh.service" > "$unit_dir/tssh.service"
 cp "$pkg_dir/tssh.socket" "$unit_dir/tssh.socket"
 systemctl --user daemon-reload
 systemctl --user disable --now remote-dev-orchestrator.socket remote-dev-orchestrator.service 2>/dev/null || true
@@ -67,5 +62,5 @@ done
 shopt -u nullglob
 systemctl --user enable --now tssh.socket
 systemctl --user restart tssh.service
-PYTHONPATH="$base/current/lib${PYTHONPATH:+:$PYTHONPATH}" "$python_bin" -c 'from remote_dev.ssh_integration import install; print(f"Legacy SSH integration migrated: {install()}")'
-echo "tssh $version installed; older managed versions removed (set TSSH_KEEP_OLD_VERSIONS=1 to retain them)"
+"$base/current/bin/tssh-python" -c 'from remote_dev.ssh_integration import install; print(f"Legacy SSH integration migrated: {install()}")'
+echo "tssh $version installed with its private Python and Ansible runtime; older managed versions removed (set TSSH_KEEP_OLD_VERSIONS=1 to retain them)"

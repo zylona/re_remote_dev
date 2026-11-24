@@ -7,7 +7,7 @@ bootstrap_runtime_packages:
   - zsh
   - git
   - tmux
-  - sudo
+  - acl
   - ca-certificates
   - openssh-server
   - bubblewrap
