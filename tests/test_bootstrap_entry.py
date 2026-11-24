@@ -2,10 +2,16 @@ from pathlib import Path
 import json
 from types import SimpleNamespace
 
+from click import unstyle
 from typer.testing import CliRunner
 
 from remote_dev.cli import _local_service_matches, _run, app
 from remote_dev.ssh_integration import install, install_target
+
+
+def _plain_output(result) -> str:
+    """Normalize Rich ANSI styling before asserting user-visible text."""
+    return unstyle(result.output)
 
 
 def test_target_install_migrates_legacy_block_without_adding_device_config(tmp_path: Path):
@@ -23,9 +29,10 @@ def test_setup_decline_cancels_before_target_prompts(monkeypatch) -> None:
     result = CliRunner().invoke(app, ["setup"], input="n\n")
 
     assert result.exit_code == 0
-    assert "阶段 1/2：本地编排器服务安装" in result.output
-    assert "远程恢复流程也未执行" in result.output
-    assert "目标 IP 或主机名" not in result.output
+    output = _plain_output(result)
+    assert "阶段 1/2：本地编排器服务安装" in output
+    assert "远程恢复流程也未执行" in output
+    assert "目标 IP 或主机名" not in output
 
 
 def test_local_service_install_decline_is_standalone(monkeypatch) -> None:
@@ -33,9 +40,10 @@ def test_local_service_install_decline_is_standalone(monkeypatch) -> None:
     result = CliRunner().invoke(app, ["local-service-install"], input="n\n")
 
     assert result.exit_code == 0
-    assert "本地编排器服务安装" in result.output
-    assert "已取消：本地服务未安装。" in result.output
-    assert "远程恢复" not in result.output
+    output = _plain_output(result)
+    assert "本地编排器服务安装" in output
+    assert "已取消：本地服务未安装。" in output
+    assert "远程恢复" not in output
 
 
 def test_local_service_current_check_is_content_based(tmp_path: Path) -> None:
@@ -118,7 +126,7 @@ def test_setup_uses_one_existing_sudo_user_and_never_provisions_accounts(monkeyp
     assert kwargs["secret_vars"] == {}
     assert kwargs["ask_become"] is True
     assert kwargs["extra_vars"]["ansible_become_method"] == "sudo"
-    assert "不会创建或修改目标账号" in result.output
+    assert "不会创建或修改目标账号" in _plain_output(result)
 
 
 def test_setup_password_auth_keeps_credentials_out_of_inventory(monkeypatch, tmp_path: Path):
@@ -200,17 +208,20 @@ def test_setup_rejects_root_as_the_target_user(monkeypatch):
     result = CliRunner().invoke(app, ["setup"], input="host.example\n22\nroot\n")
 
     assert result.exit_code != 0
-    assert "普通用户" in result.output
+    assert "普通用户" in _plain_output(result)
 
 
 def test_top_level_help_contains_manual_user_preparation_guide():
-    result = CliRunner().invoke(app, ["--help"])
+    # CI may force Rich colors, which inserts ANSI boundaries inside styled
+    # command lines (for example between ``useradd`` and ``-m``).
+    result = CliRunner().invoke(app, ["--help"], color=True)
+    output = _plain_output(result)
 
     assert result.exit_code == 0
-    assert "Debian / Ubuntu" in result.output
-    assert "useradd -m" in result.output
-    assert "目标用户准备" in result.output
-    assert "user-guide" not in result.output
+    assert "Debian / Ubuntu" in output
+    assert "useradd -m" in output
+    assert "目标用户准备" in output
+    assert "user-guide" not in output
 
 
 def test_main_playbook_does_not_create_or_modify_target_accounts():
